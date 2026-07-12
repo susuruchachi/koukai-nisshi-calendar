@@ -1,0 +1,718 @@
+// --- メインコンポーネント ---
+// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, icons.jsx
+
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+const emptyForm = (dateStr) => ({
+  id: null,
+  title: '',
+  date: dateStr,
+  allDay: false,
+  startTime: '09:00',
+  endTime: '10:00',
+  location: '',
+  notes: '',
+  recurrence: emptyRecurrence(),
+  excludedDates: [],
+});
+
+function VoyageLog() {
+  const [events, setEvents] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const now0 = new Date();
+  const [viewYear, setViewYear] = useState(now0.getFullYear());
+  const [viewMonth, setViewMonth] = useState(now0.getMonth());
+  const [selectedKey, setSelectedKey] = useState(todayKey());
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState(emptyForm(todayKey()));
+  const [confirmDelete, setConfirmDelete] = useState(null); // { masterId, occurrenceDate, isRecurring }
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (mounted && raw) {
+          setEvents(JSON.parse(raw));
+        }
+      } catch (err) {
+        // no saved events yet — fine to start with an empty log
+      } finally {
+        if (mounted) setLoaded(true);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
+  }, []);
+
+  const showToast = useCallback((message, type = 'ok') => {
+    setToast({ message, type });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2400);
+  }, []);
+
+  const persist = useCallback(async (nextEvents) => {
+    setEvents(nextEvents);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextEvents));
+    } catch (err) {
+      showToast('保存に失敗しました', 'error');
+    }
+  }, [showToast]);
+
+  const gridCells = useMemo(() => getMonthGrid(viewYear, viewMonth), [viewYear, viewMonth]);
+
+  // 表示中のカレンダーグリッドと選択日を必ずカバーする範囲で繰り返し予定を展開する
+  const occurrenceRange = useMemo(() => {
+    const gridStart = gridCells[0]?.key || selectedKey;
+    const gridEnd = gridCells[gridCells.length - 1]?.key || selectedKey;
+    const start = [gridStart, selectedKey].sort()[0];
+    const end = [gridEnd, selectedKey].sort()[1];
+    return { start, end };
+  }, [gridCells, selectedKey]);
+
+  const eventsByDate = useMemo(() => {
+    const map = {};
+    for (const ev of events) {
+      const occurrences = expandEventOccurrences(ev, occurrenceRange.start, occurrenceRange.end);
+      for (const occ of occurrences) {
+        if (!map[occ.occurrenceDate]) map[occ.occurrenceDate] = [];
+        map[occ.occurrenceDate].push(occ);
+      }
+    }
+    for (const key in map) {
+      map[key].sort((a, b) => {
+        if (a.allDay && !b.allDay) return -1;
+        if (!a.allDay && b.allDay) return 1;
+        return (a.startTime || '').localeCompare(b.startTime || '');
+      });
+    }
+    return map;
+  }, [events, occurrenceRange]);
+  const selectedEvents = eventsByDate[selectedKey] || [];
+  const todayStr = todayKey();
+
+  const selectDay = (key) => {
+    setSelectedKey(key);
+    setConfirmDelete(null);
+  };
+
+  const goPrevMonth = () => {
+    let m = viewMonth - 1, y = viewYear;
+    if (m < 0) { m = 11; y -= 1; }
+    setViewMonth(m); setViewYear(y);
+  };
+  const goNextMonth = () => {
+    let m = viewMonth + 1, y = viewYear;
+    if (m > 11) { m = 0; y += 1; }
+    setViewMonth(m); setViewYear(y);
+  };
+  const goToday = () => {
+    const now = new Date();
+    setViewYear(now.getFullYear());
+    setViewMonth(now.getMonth());
+    selectDay(todayKey());
+  };
+
+  const openAddModal = (dateStr) => {
+    setForm(emptyForm(dateStr || selectedKey));
+    setModalOpen(true);
+  };
+  const openEditModal = (ev) => {
+    // evは展開済みの発生インスタンス。編集は常にマスター予定に対して行う
+    const master = events.find((e) => e.id === ev.masterId) || ev;
+    setForm({
+      id: master.id,
+      title: master.title,
+      date: master.date,
+      allDay: master.allDay,
+      startTime: master.startTime,
+      endTime: master.endTime,
+      location: master.location,
+      notes: master.notes,
+      recurrence: master.recurrence ? { ...emptyRecurrence(), ...master.recurrence, daysOfWeek: [...(master.recurrence.daysOfWeek || [])] } : emptyRecurrence(),
+      excludedDates: master.excludedDates || [],
+      _editingOccurrenceDate: ev.occurrenceDate,
+    });
+    setModalOpen(true);
+  };
+  const closeModal = () => setModalOpen(false);
+
+  const handleSave = async () => {
+    if (!form.title.trim()) {
+      showToast('タイトルを入力してください', 'error');
+      return;
+    }
+    if (!form.allDay && form.recurrence.freq !== 'none' && form.recurrence.endType === 'until' && form.recurrence.endDate && form.recurrence.endDate < form.date) {
+      showToast('終了日は開始日より後にしてください', 'error');
+      return;
+    }
+
+    const recurrenceToSave = form.recurrence && form.recurrence.freq !== 'none'
+      ? {
+          freq: form.recurrence.freq,
+          interval: Math.max(1, parseInt(form.recurrence.interval, 10) || 1),
+          daysOfWeek: form.recurrence.freq === 'weekly' ? [...form.recurrence.daysOfWeek].sort() : [],
+          endType: form.recurrence.endType,
+          endDate: form.recurrence.endType === 'until' ? form.recurrence.endDate : null,
+          endCount: form.recurrence.endType === 'count' ? Math.max(1, parseInt(form.recurrence.endCount, 10) || 1) : null,
+        }
+      : null;
+
+    const baseData = {
+      title: form.title.trim(),
+      date: form.date,
+      allDay: form.allDay,
+      startTime: form.startTime,
+      endTime: form.endTime,
+      location: form.location,
+      notes: form.notes,
+      recurrence: recurrenceToSave,
+      excludedDates: recurrenceToSave ? (form.excludedDates || []) : [],
+    };
+
+    let next;
+    if (form.id) {
+      next = events.map((ev) => (ev.id === form.id ? { ...ev, ...baseData } : ev));
+    } else {
+      next = [...events, { ...baseData, id: generateId() }];
+    }
+    await persist(next);
+    setModalOpen(false);
+    showToast('保存しました');
+  };
+
+  const handleDeleteSeries = async (id) => {
+    const next = events.filter((ev) => ev.id !== id);
+    await persist(next);
+    setConfirmDelete(null);
+    showToast('削除しました');
+  };
+
+  const handleDeleteOccurrence = async (masterId, occurrenceDate) => {
+    const next = events.map((ev) =>
+      ev.id === masterId
+        ? { ...ev, excludedDates: [...new Set([...(ev.excludedDates || []), occurrenceDate])] }
+        : ev
+    );
+    await persist(next);
+    setConfirmDelete(null);
+    showToast('この回を削除しました');
+  };
+
+  const handleExportOne = (ev) => {
+    // 繰り返し予定の場合、この一覧項目が指す「その回」だけを単発の予定として書き出す
+    const single = ev.isRecurring
+      ? { ...ev, id: `${ev.masterId}-${ev.occurrenceDate}`, date: ev.occurrenceDate, recurrence: null, excludedDates: [] }
+      : ev;
+    const ics = buildICS([single]);
+    downloadICS(`${sanitizeFilename(ev.title)}.ics`, ics);
+    showToast('.icsを書き出しました');
+  };
+
+  const handleExportAll = () => {
+    if (events.length === 0) {
+      showToast('書き出す予定がありません', 'error');
+      return;
+    }
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+    downloadICS(`予定一覧_${stamp}.ics`, buildICS(events));
+    showToast(`${events.length}件を書き出しました`);
+  };
+
+  return (
+    <div className="voyage-log min-h-screen w-full flex items-center justify-center p-3 sm:p-6">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+        .voyage-log {
+          --ink-deep: #131E29;
+          --ink-panel: #1D2E3D;
+          --ink-panel-2: #25394B;
+          --brass: #C9A15C;
+          --brass-bright: #E3C384;
+          --chart-line: #3C5A6E;
+          --parchment: #EDE6D2;
+          --parchment-dim: #97A8B5;
+          --signal: #7FB69E;
+          --danger: #C0605A;
+          background: var(--ink-deep);
+          font-family: 'IBM Plex Sans', sans-serif;
+          color: var(--parchment);
+        }
+        .voyage-log .font-display { font-family: 'Fraunces', serif; }
+        .voyage-log .font-mono { font-family: 'IBM Plex Mono', monospace; }
+
+        .voyage-log .compass-mark {
+          animation: compass-drift 220s linear infinite;
+          transform-origin: 50% 50%;
+        }
+        @keyframes compass-drift {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .voyage-log .compass-mark { animation: none; }
+        }
+
+        .voyage-log button { font-family: inherit; cursor: pointer; }
+        .voyage-log button:focus-visible,
+        .voyage-log input:focus-visible,
+        .voyage-log textarea:focus-visible {
+          outline: 2px solid var(--brass-bright);
+          outline-offset: 2px;
+        }
+
+        .voyage-log .day-cell { transition: background-color 0.15s ease; }
+        .voyage-log .day-cell:hover { background-color: var(--ink-panel-2); }
+
+        .voyage-log .field input,
+        .voyage-log .field textarea {
+          background: #fff;
+          border: 1px solid var(--chart-line);
+          color: var(--ink-deep);
+        }
+        .voyage-log .field input:focus,
+        .voyage-log .field textarea:focus { outline: 2px solid var(--brass); outline-offset: 0; }
+
+        .voyage-log ::selection { background: var(--brass); color: var(--ink-deep); }
+      `}</style>
+
+      <div className="w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl" style={{ background: 'var(--ink-panel)', border: '1px solid var(--chart-line)' }}>
+        <div className="relative px-5 pt-5 pb-4 overflow-hidden" style={{ borderBottom: '1px solid var(--chart-line)' }}>
+          <svg className="compass-mark absolute -top-8 -right-8 opacity-10 pointer-events-none" width="150" height="150" viewBox="0 0 100 100" aria-hidden="true">
+            <circle cx="50" cy="50" r="46" fill="none" stroke="var(--brass)" strokeWidth="1" />
+            <circle cx="50" cy="50" r="37" fill="none" stroke="var(--brass)" strokeWidth="0.5" />
+            <line x1="50" y1="4" x2="50" y2="96" stroke="var(--brass)" strokeWidth="0.5" />
+            <line x1="4" y1="50" x2="96" y2="50" stroke="var(--brass)" strokeWidth="0.5" />
+            <polygon points="50,10 56,50 50,90 44,50" fill="var(--brass)" />
+          </svg>
+
+          <div className="relative flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Anchor size={18} style={{ color: 'var(--brass)' }} aria-hidden="true" />
+              <h1 className="font-display text-lg tracking-wide">航海日誌</h1>
+            </div>
+            <button
+              onClick={goToday}
+              className="font-mono text-xs px-2.5 py-1.5 rounded-md"
+              style={{ color: 'var(--brass-bright)', border: '1px solid var(--chart-line)', background: 'transparent' }}
+            >
+              今日
+            </button>
+          </div>
+
+          <div className="relative flex items-center justify-between mt-4">
+            <button onClick={goPrevMonth} aria-label="前の月" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
+              <ChevronLeft size={18} />
+            </button>
+            <div className="font-display text-xl">{viewYear}年{viewMonth + 1}月</div>
+            <button onClick={goNextMonth} aria-label="次の月" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-7 px-3 pt-3 font-mono text-[11px]">
+          {WEEKDAYS_JA.map((wd, i) => (
+            <div
+              key={wd}
+              className="text-center pb-1.5"
+              style={{ color: i === 0 ? 'var(--danger)' : i === 6 ? 'var(--signal)' : 'var(--parchment-dim)' }}
+            >
+              {wd}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-7 gap-y-1 px-3 pb-3">
+          {gridCells.map((cell) => {
+            const dayEvents = eventsByDate[cell.key] || [];
+            const isToday = cell.key === todayStr;
+            const isSelected = cell.key === selectedKey;
+            return (
+              <button
+                key={cell.key + (cell.currentMonth ? '-c' : '-o')}
+                onClick={() => selectDay(cell.key)}
+                className="day-cell relative flex flex-col items-center justify-start py-1.5 rounded-lg"
+                style={{
+                  opacity: cell.currentMonth ? 1 : 0.3,
+                  backgroundColor: isSelected ? 'var(--ink-panel-2)' : 'transparent',
+                  border: isSelected ? '1px solid var(--chart-line)' : '1px solid transparent',
+                }}
+              >
+                <span
+                  className="font-mono text-[13px] w-6 h-6 flex items-center justify-center rounded-full"
+                  style={{
+                    color: isToday ? 'var(--ink-deep)' : 'var(--parchment)',
+                    backgroundColor: isToday ? 'var(--brass)' : 'transparent',
+                    fontWeight: isToday ? 600 : 400,
+                  }}
+                >
+                  {cell.day}
+                </span>
+                <span className="flex gap-0.5 h-1.5 mt-1">
+                  {dayEvents.slice(0, 3).map((ev) => (
+                    <span key={ev.id} className="w-1 h-1 rounded-full" style={{ backgroundColor: 'var(--signal)' }} />
+                  ))}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="px-4 pt-4 pb-4" style={{ borderTop: '1px solid var(--chart-line)', background: 'var(--ink-deep)' }}>
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <h2 className="font-display text-base">{formatSelectedHeading(selectedKey)}</h2>
+            <button
+              onClick={() => openAddModal(selectedKey)}
+              className="flex items-center gap-1 font-mono text-xs px-2.5 py-1.5 rounded-md shrink-0"
+              style={{ color: 'var(--ink-deep)', backgroundColor: 'var(--brass)' }}
+            >
+              <Plus size={13} /> 予定を追加
+            </button>
+          </div>
+
+          {!loaded ? (
+            <p className="text-sm py-4 text-center" style={{ color: 'var(--parchment-dim)' }}>読み込み中…</p>
+          ) : selectedEvents.length === 0 ? (
+            <p className="text-sm py-4 text-center" style={{ color: 'var(--parchment-dim)' }}>この日の予定はまだありません</p>
+          ) : (
+            <ul className="space-y-2">
+              {selectedEvents.map((ev) => (
+                <li key={`${ev.masterId}-${ev.occurrenceDate}`} className="rounded-lg p-3" style={{ background: 'var(--ink-panel)', border: '1px solid var(--chart-line)' }}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate flex items-center gap-1.5">
+                        {ev.title}
+                        {ev.isRecurring && <Repeat size={11} style={{ color: 'var(--brass-bright)' }} aria-label="繰り返し予定" />}
+                      </p>
+                      <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--signal)' }}>
+                        {ev.allDay ? '終日' : `${ev.startTime}–${ev.endTime}`}
+                      </p>
+                      {ev.isRecurring && (
+                        <p className="text-[11px] mt-0.5" style={{ color: 'var(--parchment-dim)' }}>
+                          {RECURRENCE_LABELS[ev.recurrence.freq]}
+                          {ev.recurrence.interval > 1 ? `(${ev.recurrence.interval}${RECURRENCE_UNIT_LABELS[ev.recurrence.freq]}ごと)` : ''}
+                        </p>
+                      )}
+                      {ev.location && (
+                        <p className="text-xs mt-1 flex items-center gap-1" style={{ color: 'var(--parchment-dim)' }}>
+                          <MapPin size={11} /> {ev.location}
+                        </p>
+                      )}
+                      {ev.notes && (
+                        <p className="text-xs mt-1 whitespace-pre-wrap" style={{ color: 'var(--parchment-dim)' }}>{ev.notes}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => handleExportOne(ev)} aria-label="この予定を書き出す" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
+                        <Download size={14} />
+                      </button>
+                      <button onClick={() => openEditModal(ev)} aria-label="編集" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
+                        <Pencil size={14} />
+                      </button>
+                      {confirmDelete && confirmDelete.masterId === ev.masterId && confirmDelete.occurrenceDate === ev.occurrenceDate ? (
+                        ev.isRecurring ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleDeleteOccurrence(ev.masterId, ev.occurrenceDate)}
+                              className="font-mono text-[10px] px-1.5 py-1.5 rounded-md whitespace-nowrap"
+                              style={{ color: '#fff', backgroundColor: 'var(--danger)' }}
+                            >
+                              この回のみ
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSeries(ev.masterId)}
+                              className="font-mono text-[10px] px-1.5 py-1.5 rounded-md whitespace-nowrap"
+                              style={{ color: '#fff', backgroundColor: 'var(--danger)' }}
+                            >
+                              すべて削除
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => handleDeleteSeries(ev.masterId)}
+                            className="font-mono text-[10px] px-1.5 py-1.5 rounded-md whitespace-nowrap"
+                            style={{ color: '#fff', backgroundColor: 'var(--danger)' }}
+                          >
+                            削除する
+                          </button>
+                        )
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDelete({ masterId: ev.masterId, occurrenceDate: ev.occurrenceDate })}
+                          aria-label="削除"
+                          className="p-1.5 rounded-md"
+                          style={{ color: 'var(--parchment-dim)', background: 'transparent' }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="px-4 pb-5">
+          <button
+            onClick={handleExportAll}
+            className="w-full flex items-center justify-center gap-2 font-mono text-xs py-2.5 rounded-lg"
+            style={{ color: 'var(--brass-bright)', border: '1px solid var(--chart-line)', background: 'transparent' }}
+          >
+            <Download size={13} /> すべての予定を書き出す (.ics)
+          </button>
+          <p className="text-[11px] text-center mt-2 leading-relaxed" style={{ color: 'var(--parchment-dim)' }}>
+            PCのGoogleカレンダーで「設定」→「インポート / エクスポート」から取り込めます(スマホアプリからは不可)
+          </p>
+        </div>
+      </div>
+
+      {modalOpen && (
+        <div
+          className="fixed inset-0 flex items-end sm:items-center justify-center z-50"
+          style={{ background: 'rgba(8,12,16,0.6)' }}
+          onClick={closeModal}
+        >
+          <div
+            className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-5 max-h-[92vh] overflow-y-auto"
+            style={{ background: 'var(--parchment)', color: 'var(--ink-deep)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-display text-lg">{form.id ? '予定を編集' : '予定を追加'}</h3>
+              <button onClick={closeModal} aria-label="閉じる" className="p-1" style={{ background: 'transparent', color: 'var(--ink-deep)' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="field block">
+                <span className="text-xs font-medium block mb-1">タイトル</span>
+                <input
+                  type="text"
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg text-sm"
+                  placeholder="会議、通院、誕生日会…"
+                  autoFocus
+                />
+              </label>
+
+              <label className="field block">
+                <span className="text-xs font-medium block mb-1">日付</span>
+                <input
+                  type="date"
+                  value={form.date}
+                  onChange={(e) => setForm({ ...form, date: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg text-sm font-mono"
+                />
+              </label>
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.allDay}
+                  onChange={(e) => setForm({ ...form, allDay: e.target.checked })}
+                  style={{ accentColor: 'var(--brass)' }}
+                />
+                終日
+              </label>
+
+              {!form.allDay && (
+                <div className="flex gap-2">
+                  <label className="field block flex-1">
+                    <span className="text-xs font-medium block mb-1">開始</span>
+                    <input
+                      type="time"
+                      value={form.startTime}
+                      onChange={(e) => setForm({ ...form, startTime: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg text-sm font-mono"
+                    />
+                  </label>
+                  <label className="field block flex-1">
+                    <span className="text-xs font-medium block mb-1">終了</span>
+                    <input
+                      type="time"
+                      value={form.endTime}
+                      onChange={(e) => setForm({ ...form, endTime: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg text-sm font-mono"
+                    />
+                  </label>
+                </div>
+              )}
+
+              <label className="field block">
+                <span className="text-xs font-medium block mb-1">繰り返し</span>
+                <select
+                  value={form.recurrence.freq}
+                  onChange={(e) => setForm({ ...form, recurrence: { ...form.recurrence, freq: e.target.value } })}
+                  className="w-full px-3 py-2 rounded-lg text-sm"
+                >
+                  <option value="none">繰り返さない</option>
+                  <option value="daily">毎日</option>
+                  <option value="weekly">毎週</option>
+                  <option value="monthly">毎月</option>
+                  <option value="yearly">毎年</option>
+                </select>
+              </label>
+
+              {form.recurrence.freq !== 'none' && (
+                <div className="rounded-lg p-3 space-y-3" style={{ background: 'rgba(60,90,110,0.08)', border: '1px solid var(--chart-line)' }}>
+                  <label className="field flex items-center gap-2">
+                    <span className="text-xs font-medium shrink-0">間隔</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.recurrence.interval}
+                      onChange={(e) => setForm({ ...form, recurrence: { ...form.recurrence, interval: e.target.value } })}
+                      className="w-16 px-2 py-1.5 rounded-lg text-sm font-mono"
+                    />
+                    <span className="text-xs">{RECURRENCE_UNIT_LABELS[form.recurrence.freq]}ごと</span>
+                  </label>
+
+                  {form.recurrence.freq === 'weekly' && (
+                    <div>
+                      <span className="text-xs font-medium block mb-1.5">曜日</span>
+                      <div className="flex gap-1">
+                        {WEEKDAYS_JA.map((wd, i) => {
+                          const active = form.recurrence.daysOfWeek.includes(i);
+                          return (
+                            <button
+                              key={wd}
+                              type="button"
+                              onClick={() => {
+                                const days = active
+                                  ? form.recurrence.daysOfWeek.filter((d) => d !== i)
+                                  : [...form.recurrence.daysOfWeek, i];
+                                setForm({ ...form, recurrence: { ...form.recurrence, daysOfWeek: days } });
+                              }}
+                              className="w-8 h-8 rounded-full text-xs font-mono"
+                              style={{
+                                color: active ? 'var(--ink-deep)' : 'var(--ink-deep)',
+                                backgroundColor: active ? 'var(--brass)' : '#fff',
+                                border: '1px solid var(--chart-line)',
+                              }}
+                            >
+                              {wd}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[11px] mt-1" style={{ color: '#5B6D7A' }}>
+                        未選択の場合、開始日の曜日が使われます
+                      </p>
+                    </div>
+                  )}
+
+                  <div>
+                    <span className="text-xs font-medium block mb-1.5">終了条件</span>
+                    <select
+                      value={form.recurrence.endType}
+                      onChange={(e) => setForm({ ...form, recurrence: { ...form.recurrence, endType: e.target.value } })}
+                      className="w-full px-3 py-2 rounded-lg text-sm"
+                    >
+                      <option value="never">終了しない</option>
+                      <option value="until">日付を指定</option>
+                      <option value="count">回数を指定</option>
+                    </select>
+                  </div>
+
+                  {form.recurrence.endType === 'until' && (
+                    <label className="field block">
+                      <span className="text-xs font-medium block mb-1">終了日</span>
+                      <input
+                        type="date"
+                        value={form.recurrence.endDate}
+                        min={form.date}
+                        onChange={(e) => setForm({ ...form, recurrence: { ...form.recurrence, endDate: e.target.value } })}
+                        className="w-full px-3 py-2 rounded-lg text-sm font-mono"
+                      />
+                    </label>
+                  )}
+
+                  {form.recurrence.endType === 'count' && (
+                    <label className="field flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        value={form.recurrence.endCount}
+                        onChange={(e) => setForm({ ...form, recurrence: { ...form.recurrence, endCount: e.target.value } })}
+                        className="w-16 px-2 py-1.5 rounded-lg text-sm font-mono"
+                      />
+                      <span className="text-xs">回で終了</span>
+                    </label>
+                  )}
+
+                  {form.id && (
+                    <p className="text-[11px] leading-relaxed" style={{ color: '#5B6D7A' }}>
+                      ※ 変更はこの繰り返し予定シリーズ全体に適用されます
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <label className="field block">
+                <span className="text-xs font-medium block mb-1">場所 (任意)</span>
+                <input
+                  type="text"
+                  value={form.location}
+                  onChange={(e) => setForm({ ...form, location: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg text-sm"
+                />
+              </label>
+
+              <label className="field block">
+                <span className="text-xs font-medium block mb-1">メモ (任意)</span>
+                <textarea
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-lg text-sm resize-none"
+                />
+              </label>
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <button
+                onClick={closeModal}
+                className="flex-1 py-2.5 rounded-lg text-sm font-medium"
+                style={{ border: '1px solid var(--chart-line)', background: 'transparent', color: 'var(--ink-deep)' }}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleSave}
+                className="flex-1 py-2.5 rounded-lg text-sm font-medium"
+                style={{ background: 'var(--ink-deep)', color: 'var(--parchment)' }}
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full font-mono text-xs shadow-lg z-50"
+          style={{
+            background: toast.type === 'error' ? 'var(--danger)' : 'var(--brass)',
+            color: toast.type === 'error' ? '#fff' : 'var(--ink-deep)',
+          }}
+        >
+          {toast.message}
+        </div>
+      )}
+    </div>
+  );
+}
