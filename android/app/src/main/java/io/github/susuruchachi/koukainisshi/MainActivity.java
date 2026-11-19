@@ -7,6 +7,7 @@ package io.github.susuruchachi.koukainisshi;
 //   受け取った ID トークンをウェブ版に渡す（KoukaiApp.takeLogin）。Firebase にこのアプリが登録されていないなどで断られたときは、
 //   ブラウザで app-login.html を開いてログインし、「アプリに戻る」（koukainisshi://auth?state=…&id=…）で受け取る（googleSignInBrowser）
 // ・.ics の書き出しは「ダウンロード」フォルダーに保存する（WebView ではブラウザのダウンロードが動かないため）
+// ・アプリの自動更新（ApkUpdater）：新しい APK を裏でダウンロードし、アプリを閉じて1分たったら入れ替える（はじめの1回だけ確認が出る）
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
@@ -57,10 +58,18 @@ public class MainActivity extends Activity {
     private WebView web;
     private boolean pageLoaded = false;
     private final Executor bg = Executors.newSingleThreadExecutor();
+    // 予定を書いている途中でないか（ウェブ版が apkSetIdle で知らせる）。途中なら、裏に回っても入れ替えない
+    static volatile boolean jsIdle = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        ApkUpdater.appAlive = true;
+        // 新しい版に入れ替わってから、はじめて開いたとき
+        android.content.SharedPreferences up = getSharedPreferences("koukai_update", MODE_PRIVATE);
+        int lastCode = up.getInt("code", 0);
+        if (lastCode != 0 && lastCode < BuildConfig.VERSION_CODE) Toast.makeText(this, "📲 航海日誌のアプリを新しくしました（" + BuildConfig.VERSION_NAME + "）", Toast.LENGTH_LONG).show();
+        if (lastCode != BuildConfig.VERSION_CODE) up.edit().putInt("code", BuildConfig.VERSION_CODE).apply();
         getWindow().setStatusBarColor(Color.parseColor("#131E29"));
         getWindow().setNavigationBarColor(Color.parseColor("#131E29"));
 
@@ -145,6 +154,20 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); }
+
+    // 自動更新：閉じて（裏に回して）1分たち、書いている途中でなく、確認なしで入れられるなら入れ替える（InstallResultReceiver が入れる）
+    @Override
+    protected void onStart() { super.onStart(); ApkUpdater.onShown(this); }
+    @Override
+    protected void onStop() { super.onStop(); ApkUpdater.onHidden(this); }
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 裏で入れようとしたら確認が要った：開いたときに確認を出す
+        if (InstallResultReceiver.askLater) { InstallResultReceiver.askLater = false; bg.execute(() -> ApkUpdater.install(getApplicationContext())); }
+    }
+    @Override
+    protected void onDestroy() { ApkUpdater.appAlive = false; super.onDestroy(); }
 
     private void openExternal(Uri u) {
         try { startActivity(new Intent(Intent.ACTION_VIEW, u).addCategory(Intent.CATEGORY_BROWSABLE)); }
@@ -242,6 +265,30 @@ public class MainActivity extends Activity {
             if (!v.isEmpty()) p.edit().remove("pending").apply();
             return v;
         }
+
+        // ---- アプリの自動更新（app-bridge.js から） ----
+        // apkPrepare：裏でダウンロード（終わったら window.__koukaiApkReady(ok, 確認なしで入れられるか)）。このサイトの APK だけ
+        @JavascriptInterface public void apkPrepare(String url, long code) {
+            if (!isOwnPage(Uri.parse(url)) || !url.endsWith(".apk")) return;
+            bg.execute(() -> {
+                boolean ok = ApkUpdater.download(getApplicationContext(), url, code);
+                boolean silent = ApkUpdater.canSilent(MainActivity.this);
+                runOnUiThread(() -> web.evaluateJavascript("window.__koukaiApkReady&&window.__koukaiApkReady(" + ok + "," + silent + ")", null));
+            });
+        }
+        @JavascriptInterface public boolean apkCanSilent() { return ApkUpdater.canSilent(MainActivity.this); }
+        @JavascriptInterface public boolean apkReady() { return ApkUpdater.ready(MainActivity.this); }
+        // いま入れる（確認が要れば確認の画面が出る）
+        @JavascriptInterface public void apkInstallNow() {
+            if (!getPackageManager().canRequestPackageInstalls()) {
+                toast("「この提供元のアプリを許可」をオンにしてから、もう一度「更新する」を押してください");
+                try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); } catch (Exception e) {}
+                return;
+            }
+            bg.execute(() -> { if (!ApkUpdater.install(getApplicationContext())) toast("更新を始められませんでした"); });
+        }
+        // いま入れ替えてよいか（予定を書いている途中でないか）
+        @JavascriptInterface public void apkSetIdle(boolean idle) { jsIdle = idle; }
 
         // ファイルを「ダウンロード」フォルダーに保存する（.ics の書き出し）。保存できたら true
         @JavascriptInterface public boolean saveFile(String name, String mime, String base64) {

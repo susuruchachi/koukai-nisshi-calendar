@@ -139,6 +139,16 @@ function VoyageLog() {
     return () => { window.__koukaiOpen = null; };
   }, [openDiary, openDay]);
 
+  // Android アプリの自動更新：ダウンロードできたら知らせが来る。確認が要るときだけ、上に「📲 アプリを更新」を出す
+  const [apk, setApk] = useState(() => (typeof koukaiApk !== 'undefined' ? koukaiApk : { ready: false, silent: false }));
+  useEffect(() => {
+    const on = (e) => setApk(e.detail);
+    window.addEventListener('koukai-apk', on);
+    return () => window.removeEventListener('koukai-apk', on);
+  }, []);
+  // 予定を書いている途中・ログインの途中は、アプリを閉じても入れ替えない
+  useEffect(() => { koukaiApkSetIdle(!modalOpen && !syncOpen); }, [modalOpen, syncOpen]);
+
   // Android アプリの戻るボタン：開いている画面を閉じる（閉じたら true）
   const openLayers = useRef({});
   openLayers.current = { modalOpen, reviewOpen, syncOpen };
@@ -456,6 +466,17 @@ function VoyageLog() {
         .voyage-log .diary-input:disabled { opacity: 0.45; }
       `}</style>
 
+      <div className="w-full max-w-lg">
+      {apk.ready && !apk.silent && koukaiAppOutdated() && (
+        <div className="mb-3 rounded-xl px-4 py-3 flex items-center gap-3" style={{ background: 'var(--brass)', color: 'var(--ink-deep)' }}>
+          <p className="text-xs flex-1 leading-relaxed">
+            <b>📲 新しいアプリがあります</b><br />今回だけ確認が出ます。次からは、アプリを閉じたときに自動で更新されます（予定・日記はそのまま）。
+          </p>
+          <button onClick={() => koukaiInstallApk()} className="shrink-0 text-xs font-semibold px-3 py-2 rounded-lg" style={{ background: 'var(--ink-deep)', color: 'var(--parchment)' }}>
+            更新する
+          </button>
+        </div>
+      )}
       <div className="w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl" style={{ background: 'var(--ink-panel)', border: '1px solid var(--chart-line)' }}>
         <div className="relative px-5 pt-5 pb-4 overflow-hidden" style={{ borderBottom: '1px solid var(--chart-line)' }}>
           <svg className="compass-mark absolute -top-8 -right-8 opacity-10 pointer-events-none" width="150" height="150" viewBox="0 0 100 100" aria-hidden="true">
@@ -804,7 +825,19 @@ function VoyageLog() {
           <p className="text-[11px] text-center mt-2 leading-relaxed" style={{ color: 'var(--parchment-dim)' }}>
             PCのGoogleカレンダーで「設定」→「インポート / エクスポート」から取り込めます(スマホアプリからは不可)
           </p>
-          {koukaiAppOutdated() ? (
+          {koukaiAppOutdated() && koukaiApkAuto() ? (
+            apk.silent ? (
+              <p className="mt-3 text-[11px] text-center" style={{ color: 'var(--parchment-dim)' }}>📲 新しいアプリを用意しています。アプリを閉じると自動で更新されます</p>
+            ) : (
+              <button
+                onClick={() => koukaiInstallApk()}
+                className="mt-3 w-full flex items-center justify-center gap-2 font-mono text-xs py-2.5 rounded-lg"
+                style={{ color: 'var(--ink-deep)', background: 'var(--brass)' }}
+              >
+                🆕 新しいアプリに更新する
+              </button>
+            )
+          ) : koukaiAppOutdated() ? (
             <a
               href={ANDROID_APK_URL}
               className="mt-3 w-full flex items-center justify-center gap-2 font-mono text-xs py-2.5 rounded-lg"
@@ -822,6 +855,8 @@ function VoyageLog() {
             </a>
           ) : null}
         </div>
+      </div>
+
       </div>
 
       {modalOpen && (

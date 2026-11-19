@@ -146,9 +146,13 @@ PWA(Progressive Web App)化してあるので、Chromeの「インストール�
   - 登録していないなどでうまくいかないときは、「うまくいかないとき：ブラウザでログイン」で、ブラウザで `app-login.html` を開いてログイン →「アプリに戻る」（アプリが作った合言葉 state を確かめる）
   - メールでのログインはアプリの中でそのままできる
 - **.ics の書き出し**：アプリでは「ダウンロード」フォルダーに保存する
-- **作り直すとき**（android/ を変えたときだけ）：`android/app/build.gradle` の `versionCode` と `app-bridge.js` の `ANDROID_APK_CODE` を同じ数に上げて、
-  GitHub の Actions →「android-apk」→ Run workflow。署名鍵を Secrets（`KOUKAI_KEYSTORE_B64`・`KOUKAI_KEYSTORE_PASSWORD`）に入れておくと、
-  前のアプリの上から入れ直せる APK になり、`apk/koukai-nisshi.apk` に置かれる。古いアプリを開くと「🆕 新しいアプリがあります」と出る
+- **自動更新**（1.2.0 から）：アプリを開いたとき（と4時間ぶりに戻ったとき）、`app-bridge.js` の `ANDROID_APK_CODE` が入っているアプリより新しければ、
+  このサイトの `apk/koukai-nisshi.apk` を裏でダウンロードし（版を確かめる）、Android の PackageInstaller で入れる（`ApkUpdater.java`・`InstallResultReceiver.java`。すするanki と同じしくみ）
+  - はじめの1回（ブラウザ・ファイルから入れたアプリ）は確認が要るので、上に「📲 新しいアプリがあります → 更新する」を出す（「この提供元のアプリを許可」も聞かれることがある）
+  - その1回のあとは（Android 12 以上）、アプリを閉じて1分たつと確認なしで入れ替わる。予定を書いている途中・ログインの途中は入れ替えない。次に開くと「アプリを新しくしました」
+- **作り直すとき**（android/ を変えたときだけ）：`android/app/build.gradle` の `versionCode` を1つ上げて、GitHub の Actions →「android-apk」→ Run workflow。
+  署名鍵を Secrets（`KOUKAI_KEYSTORE_B64`・`KOUKAI_KEYSTORE_PASSWORD`）に入れておくと、APK を `apk/koukai-nisshi.apk` に置き、`ANDROID_APK_CODE` も同じ数にする
+  → 入っているアプリが自動で更新される（main で動かしたとき。手元で作ったときは `ANDROID_APK_CODE` を自分で同じ数にする）
 - 手元で作るとき：`cd android && gradle assembleRelease`（Android SDK と JDK 17 以上が要る。`KOUKAI_KEYSTORE`・`KOUKAI_KEYSTORE_PASSWORD` で署名鍵を渡す）
 
 ## データの保存先

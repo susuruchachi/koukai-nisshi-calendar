@@ -1,7 +1,8 @@
 // 航海日誌の Android アプリ（WebView 版）
 // 中身はウェブ版（GitHub Pages）を Android の内蔵部品（Android System WebView）で表示する。
 // 画面の中身はウェブ版を更新すれば自動で新しくなる。APK を作り直すのは、このフォルダー（ウィジェットなど）を変えたときだけ。
-// 作り直したら versionCode を1つ上げ、app-bridge.js の ANDROID_APK_CODE も同じ数にする（アプリの中で「新しいアプリがあります」と出す）
+// 作り直すときは versionCode を1つ上げる。GitHub Actions（android-apk）が app-bridge.js の ANDROID_APK_CODE も同じ数にして、
+// 入っているアプリが自動で更新される（手元で作ったときは、ANDROID_APK_CODE を自分で同じ数にする）
 plugins {
     id 'com.android.application'
 }
@@ -14,8 +15,8 @@ android {
         applicationId 'io.github.susuruchachi.koukainisshi'
         minSdk 24
         targetSdk 35
-        versionCode 2
-        versionName '1.1.0'
+        versionCode 3
+        versionName '1.2.0'
 
         def host = 'susuruchachi.github.io'
         def path = '/koukai-nisshi-calendar/'
