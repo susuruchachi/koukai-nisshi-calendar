@@ -14,6 +14,8 @@ index.html          … 全ファイルを読み込むシェル(この順序を�
   │    └─ depends on: date-utils.js, constants.js
   ├─ diary.js          できた事日記（1日3つ＋すするankiの単語数）の保存・連続日数・月の合計
   │    └─ depends on: date-utils.js
+  ├─ anki-feeds.js     すするanki の見るだけの予定（URL で購読したカレンダー・グループの予定）を読んで、その日の予定にする
+  │    └─ depends on: date-utils.js, recurrence.js
   ├─ app-bridge.js     Android アプリとのやりとり（ウィジェットに渡すデータ・.ics の保存・ウィジェットから開く）
   │    └─ depends on: date-utils.js, recurrence.js, diary.js
   ├─ icons.jsx         lucide-react の代わりのインラインSVGアイコン
@@ -98,6 +100,18 @@ PWA(Progressive Web App)化してあるので、Chromeの「インストール�
 - 新しく変えた方（`at` が大きい方）を使う。消した予定は `{ deleted: true, at }`（この端末の消した記録は `koukai-nisshi-deleted`）
 - 同期がオフなら、今までどおりこの端末の中（localStorage）だけ
 
+### すするanki の「見るだけ」の予定（anki-feeds.js）
+
+ログインしていれば、すするanki の次の予定も、カレンダーに出します（「☁️ 同期」の「URL で購読したカレンダーとグループの予定も出す」。はじめはオン）。
+予定には「🔗 名前」「👪 グループ名」と「（すするanki・見るだけ）」が付き、ここでは直せません（元のカレンダー・すするanki で直すと、ここに届きます）。
+
+- **🔗 URL で購読したカレンダー**（すするanki のカレンダーの「🔗 連携」→「URL で購読」：Studyplus・Google の iCal の URL など）：
+  すするanki（またはそのサーバー）が読んだ .ics を gzip して置いている Firestore の `susuru_anki_ical/{uid}_{sid}`（本人だけ読める）を読み、
+  すするanki と同じ読み方（`calParseIcs`・`calMergeRepeats`）で予定にする。1か月以上前に終わった予定は出さない。毎月・毎年・何日おきの予定は繰り返しのまま出す
+  （新しくなるのは、すするanki がその URL を読み直したとき）
+- **👪 グループの予定**：`susuru_anki_groups`（自分がメンバーのグループ）の `events`
+- ウィジェットにも出る。読んだものはこの端末に覚えておく（`koukai-nisshi-feeds`。ログアウト・別のアカウントで消す）
+
 ## ✦ できた事日記（diary.js）
 
 選んだ日の予定の下に「今日のできた事」の欄があります。
@@ -124,8 +138,13 @@ PWA(Progressive Web App)化してあるので、Chromeの「インストール�
   - **航海日誌 カレンダー**（4×4）：今月のカレンダー（予定のある日に点・日記を書いた日に ✦・今日は真鍮色）と今日の予定。日を押すとその日が開く
   - **航海日誌 できた事日記**（4×2）：今日できた事3つ・すするanki の単語数・続けて書いた日数。押すと「今日のできた事」の欄が開いてすぐ書ける
   - データはアプリを開いたとき（予定・日記を変えたとき）に届く。夜中の0時すぎに「今日」を描き直す
-- **Google ログイン**：WebView の中では Google がログインを許さないので、「Google でログイン」を押すとブラウザで
-  `app-login.html` が開く → ログイン →「アプリに戻る」で戻るとログインできている（アプリが作った合言葉 state を確かめる）。メールでのログインはアプリの中でそのままできる
+- **Google ログイン**（1.1.0）：「Google でログイン」で、アプリの中にアカウントを選ぶ画面（Android の Credential Manager）が出る。選ぶとログインできる
+  - これには、Firebase（susuruanki のプロジェクト）にこのアプリを **Android アプリとして登録** しておく必要がある：
+    Firebase コンソール → ⚙️ プロジェクトの設定 →「マイアプリ」→「アプリを追加」→ Android →
+    パッケージ名 `io.github.susuruchachi.koukainisshi`・デバッグ用の署名証明書 SHA-1 `D6:7E:AB:48:3B:6E:A7:01:34:DD:30:3B:96:CF:FA:80:A1:EB:54:8A` →「アプリを登録」
+    （google-services.json は要らない。そのあとの手順は飛ばしてよい）
+  - 登録していないなどでうまくいかないときは、「うまくいかないとき：ブラウザでログイン」で、ブラウザで `app-login.html` を開いてログイン →「アプリに戻る」（アプリが作った合言葉 state を確かめる）
+  - メールでのログインはアプリの中でそのままできる
 - **.ics の書き出し**：アプリでは「ダウンロード」フォルダーに保存する
 - **作り直すとき**（android/ を変えたときだけ）：`android/app/build.gradle` の `versionCode` と `app-bridge.js` の `ANDROID_APK_CODE` を同じ数に上げて、
   GitHub の Actions →「android-apk」→ Run workflow。署名鍵を Secrets（`KOUKAI_KEYSTORE_B64`・`KOUKAI_KEYSTORE_PASSWORD`）に入れておくと、

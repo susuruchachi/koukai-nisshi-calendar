@@ -1,10 +1,11 @@
 // --- メインコンポーネント ---
-// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, app-bridge.js, icons.jsx
+// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, anki-feeds.js, app-bridge.js, icons.jsx
 
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 // すするanki から届いた予定の種類（テスト・授業など）の印
 const TYPE_ICONS = { class: '📚', test: '📝', exam: '🗓️', deadline: '⏰' };
+const NO_FEEDS = [];
 
 const emptyForm = (dateStr) => ({
   id: null,
@@ -93,7 +94,9 @@ function VoyageLog() {
   }, []);
 
   // Android アプリ：予定や日記が変わったら、ホーム画面のウィジェットに渡す
-  useEffect(() => { if (loaded) koukaiSendWidget(events, diary); }, [events, diary, loaded]);
+  // すするanki の見るだけの予定（URL で購読したカレンダー・グループの予定。sync.js が読む）
+  const feeds = (sync && sync.feeds) || NO_FEEDS;
+  useEffect(() => { if (loaded) koukaiSendWidget(events, diary, feeds); }, [events, diary, feeds, loaded]);
 
   // 日記の欄へ移る（ウィジェットの「できた事を書く」・?view=diary から）
   const openDiary = useCallback((key) => {
@@ -187,9 +190,15 @@ function VoyageLog() {
     if (window.VoyageSync) window.VoyageSync.push(stamped);
   }, [showToast]);
 
+  const [loginErr, setLoginErr] = useState('');
   const runSync = async (fn, okMsg) => {
+    setLoginErr('');
     try { await fn(); if (okMsg) showToast(okMsg); }
-    catch (e) { showToast(`できませんでした（${e.code || e.message}）`, 'error'); }
+    catch (e) {
+      // アプリのログインで断られたときは、わけと次にすることを、ダイアログに残しておく
+      if (String(e.code || '').startsWith('app/')) { setLoginErr(e.message); if (e.code === 'app/cancelled') return; }
+      showToast(`できませんでした（${e.code || e.message}）`, 'error');
+    }
   };
 
   const gridCells = useMemo(() => getMonthGrid(viewYear, viewMonth), [viewYear, viewMonth]);
@@ -212,6 +221,10 @@ function VoyageLog() {
         map[occ.occurrenceDate].push(occ);
       }
     }
+    for (const occ of ankiFeedOccurrences(feeds, occurrenceRange.start, occurrenceRange.end)) {
+      if (!map[occ.occurrenceDate]) map[occ.occurrenceDate] = [];
+      map[occ.occurrenceDate].push(occ);
+    }
     for (const key in map) {
       map[key].sort((a, b) => {
         if (a.allDay && !b.allDay) return -1;
@@ -220,7 +233,7 @@ function VoyageLog() {
       });
     }
     return map;
-  }, [events, occurrenceRange]);
+  }, [events, feeds, occurrenceRange]);
   const selectedEvents = eventsByDate[selectedKey] || [];
   const todayStr = todayKey();
   const selDiary = diary[selectedKey] || emptyDiaryEntry();
@@ -580,6 +593,11 @@ function VoyageLog() {
                           {ev.recurrence.interval > 1 ? `(${ev.recurrence.interval}${RECURRENCE_UNIT_LABELS[ev.recurrence.freq]}ごと)` : ''}
                         </p>
                       )}
+                      {ev.readOnly && ev.source && (
+                        <p className="text-[11px] mt-0.5" style={{ color: 'var(--brass-bright)' }}>
+                          {ev.source.kind === 'group' ? '👪' : '🔗'} {ev.source.name}（すするanki・見るだけ）
+                        </p>
+                      )}
                       {ev.location && (
                         <p className="text-xs mt-1 flex items-center gap-1" style={{ color: 'var(--parchment-dim)' }}>
                           <MapPin size={11} /> {ev.location}
@@ -593,10 +611,12 @@ function VoyageLog() {
                       <button onClick={() => handleExportOne(ev)} aria-label="この予定を書き出す" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
                         <Download size={14} />
                       </button>
+                      {!ev.readOnly && (
                       <button onClick={() => openEditModal(ev)} aria-label="編集" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
                         <Pencil size={14} />
                       </button>
-                      {confirmDelete && confirmDelete.masterId === ev.masterId && confirmDelete.occurrenceDate === ev.occurrenceDate ? (
+                      )}
+                      {ev.readOnly ? null : confirmDelete && confirmDelete.masterId === ev.masterId && confirmDelete.occurrenceDate === ev.occurrenceDate ? (
                         ev.isRecurring ? (
                           <div className="flex items-center gap-1">
                             <button
@@ -1091,6 +1111,12 @@ function VoyageLog() {
             ) : !sync.user ? (
               <div className="space-y-2">
                 <button onClick={() => runSync(() => window.VoyageSync.signInGoogle(), 'ログインしました')} className="w-full py-2.5 rounded-lg text-sm font-medium" style={{ background: 'var(--ink-deep)', color: 'var(--parchment)' }}>Google でログイン</button>
+                {window.VoyageSync.canBrowserSignIn && window.VoyageSync.canBrowserSignIn() && (
+                  <button onClick={() => runSync(() => window.VoyageSync.signInGoogleBrowser(), 'ログインしました')} className="w-full py-2 rounded-lg text-xs" style={{ border: '1px solid var(--chart-line)' }}>
+                    うまくいかないとき：ブラウザでログイン（ログインしたら「アプリに戻る」）
+                  </button>
+                )}
+                {loginErr && <p className="text-xs" style={{ color: 'var(--danger)' }}>⚠️ {loginErr}</p>}
                 <p className="text-xs" style={{ opacity: 0.75 }}>すするanki で使っているアカウントでログインしてください。メールアドレスを足してあれば、メールでも入れます。</p>
                 <input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="メールアドレス" className="w-full px-3 py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }} />
                 <input type="password" value={loginPw} onChange={(e) => setLoginPw(e.target.value)} placeholder="パスワード" className="w-full px-3 py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }} />
@@ -1106,6 +1132,21 @@ function VoyageLog() {
                 <p className="text-xs" style={{ opacity: 0.8 }}>
                   {!sync.on ? '同期していません（予定はこの端末の中だけ）。' : sync.error ? `⚠️ 同期できません（${sync.error}）` : sync.ready ? `✅ 同期しています（${sync.count}件）` : '⏳ つないでいます…'}
                 </p>
+                <label className="flex items-start gap-2 text-sm pt-2" style={{ borderTop: '1px solid var(--chart-line)' }}>
+                  <input type="checkbox" className="mt-1" checked={sync.feedsOn} onChange={(e) => window.VoyageSync.setFeedsOn(e.target.checked)} />
+                  <span>すするanki の「🔗 URL で購読したカレンダー」と「👪 グループの予定」も出す（見るだけ）</span>
+                </label>
+                {sync.feedsOn && (
+                  <div className="text-xs space-y-0.5" style={{ opacity: 0.8 }}>
+                    {sync.feedInfo.error ? <p>⚠️ 読めません（{sync.feedInfo.error}）</p> : null}
+                    {sync.feedInfo.subs.map((x, i) => (
+                      <p key={'s' + i}>🔗 {x.name}：{x.err && !x.n ? `⚠️ ${x.err}` : `${x.n}件`}{x.fetchedAt ? `（${new Date(x.fetchedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} にすするankiが読んだ分）` : ''}</p>
+                    ))}
+                    {sync.feedInfo.groups.map((x, i) => <p key={'g' + i}>👪 {x.name}：{x.n}件</p>)}
+                    {!sync.feedInfo.subs.length && !sync.feedInfo.groups.length && !sync.feedInfo.error && <p>すするanki で購読しているカレンダー・グループはありません。</p>}
+                    <p>直すときは、元のカレンダーやすするanki で直してください（ここには自動で届きます）。</p>
+                  </div>
+                )}
                 <button onClick={() => runSync(() => window.VoyageSync.signOut(), 'ログアウトしました')} className="w-full py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }}>ログアウト</button>
               </div>
             )}

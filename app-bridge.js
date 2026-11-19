@@ -1,11 +1,11 @@
 // --- Android アプリ（android/ の WebView 版）とのやりとり ---
-// 依存: date-utils.js, recurrence.js, diary.js
+// 依存: date-utils.js, recurrence.js, diary.js, anki-feeds.js
 // ・アプリの中で開いているときだけ window.KoukaiApp がある（MainActivity.java の Bridge）
 // ・ホーム画面のウィジェット（カレンダー・できた事日記）に、予定と日記を渡す（KoukaiApp.setWidgetData）
 // ・ウィジェットから開いたとき（「できた事を書く」など）は window.__koukaiOpen(view) が呼ばれる
 
 // 公開している APK（android/ を作り直したら、ここと android/app/build.gradle の versionCode を一緒に上げる）
-const ANDROID_APK_CODE = 1;
+const ANDROID_APK_CODE = 2;
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/koukai-nisshi-calendar/raw/main/apk/koukai-nisshi.apk';
 
 function koukaiIsApp() {
@@ -20,7 +20,7 @@ function koukaiAppOutdated() {
 // ウィジェットに渡すもの：
 //   days  … 先月の1日から62日先までの、日ごとの予定 [{ s: 開始, e: 終了, n: 名前, i: 印 }]（終日は s が空）
 //   diary … 今日から90日前までの日記 { 日付: { items, anki } }（連続日数はウィジェットで数え直す）
-function koukaiBuildWidgetData(events, diary) {
+function koukaiBuildWidgetData(events, diary, feeds) {
   const today = todayKey();
   const now = new Date();
   const start = dateKey(now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear(), (now.getMonth() + 11) % 12, 1);
@@ -39,6 +39,15 @@ function koukaiBuildWidgetData(events, diary) {
       });
     });
   });
+  // すするanki の見るだけの予定（URL で購読・グループ）も出す
+  try {
+    ankiFeedOccurrences(feeds || [], start, end).forEach((o) => {
+      (days[o.occurrenceDate] = days[o.occurrenceDate] || []).push({
+        s: o.allDay ? '' : (o.startTime || ''), e: o.allDay ? '' : (o.endTime || ''), n: o.title || '',
+        i: (typeof TYPE_ICONS !== 'undefined' && TYPE_ICONS[o.type]) || '',
+      });
+    });
+  } catch (e) {}
   Object.values(days).forEach((list) => list.sort((a, b) => (a.s || '').localeCompare(b.s || '')));
   const from = addDaysToKey(today, -90);
   const d = {};
@@ -51,11 +60,11 @@ function koukaiBuildWidgetData(events, diary) {
 }
 
 let _koukaiWidgetTimer = null;
-function koukaiSendWidget(events, diary) {
+function koukaiSendWidget(events, diary, feeds) {
   if (!koukaiIsApp()) return;
   clearTimeout(_koukaiWidgetTimer);
   _koukaiWidgetTimer = setTimeout(() => {
-    try { window.KoukaiApp.setWidgetData(JSON.stringify(koukaiBuildWidgetData(events, diary))); } catch (e) {}
+    try { window.KoukaiApp.setWidgetData(JSON.stringify(koukaiBuildWidgetData(events, diary, feeds))); } catch (e) {}
   }, 500);
 }
 
