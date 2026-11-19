@@ -41,18 +41,29 @@ function matchesRecurrencePattern(startKey, rec, dayKey) {
   return false;
 }
 
+// 何日か続く予定の日数（end が最後の日。1日だけなら 0）
+function eventSpanDays(ev) {
+  if (!ev.end || ev.end <= ev.date) return 0;
+  const a = parseDateKey(ev.date), b = parseDateKey(ev.end);
+  return Math.round((new Date(b.year, b.month, b.day) - new Date(a.year, a.month, a.day)) / 86400000);
+}
+
 // マスター予定(ev)を [rangeStartKey, rangeEndKey] の範囲内で実際の発生日に展開する
+// ・何日か続く予定（end が最後の日）は、その間の毎日に出す。どの発生にも instanceDate（その回の最初の日）と spanEnd（その回の最後の日）を付ける
+// ・何日か続く予定を繰り返すとき（毎年の合宿など）は、繰り返しの日がその回の最初の日になり、そこから同じ日数だけ続く。
+//   「この回のみ削除」（excludedDates）は、その回の最初の日で覚える
 function expandEventOccurrences(ev, rangeStartKey, rangeEndKey) {
   const rec = ev.recurrence;
   const excluded = new Set(ev.excludedDates || []);
+  const span = eventSpanDays(ev);
   const result = [];
 
   if (!rec || rec.freq === 'none') {
-    // 何日か続く予定（すするanki の試験期間など：end が最後の日）は、その間の毎日に出す
-    const last = ev.end && ev.end > ev.date ? ev.end : ev.date;
+    // 繰り返さない予定（何日か続く予定はその間の毎日。すするanki の試験期間などは、1日ずつ消した日が excludedDates にある）
+    const last = span ? ev.end : ev.date;
     for (let k = ev.date, g = 0; k <= last && g < 400; k = addDaysToKey(k, 1), g++) {
       if (k >= rangeStartKey && k <= rangeEndKey && !excluded.has(k)) {
-        result.push({ ...ev, occurrenceDate: k, masterId: ev.id, isRecurring: false });
+        result.push({ ...ev, occurrenceDate: k, masterId: ev.id, isRecurring: false, instanceDate: ev.date, spanEnd: last });
       }
     }
     return result;
@@ -62,7 +73,7 @@ function expandEventOccurrences(ev, rangeStartKey, rangeEndKey) {
   const hasCount = rec.endType === 'count' && rec.endCount;
   const SAFETY_CAP_DAYS = 7300; // 約20年分。無限ループ防止のガード
 
-  let curKey = ev.date < rangeStartKey ? ev.date : ev.date; // 開始日から走査(範囲より前から数える必要があるため)
+  let curKey = ev.date; // 開始日から走査(回数を数えるため、範囲より前からも見る)
   let matchIndex = 0;
   let iterGuard = 0;
 
@@ -70,8 +81,15 @@ function expandEventOccurrences(ev, rangeStartKey, rangeEndKey) {
     if (hasUntil && curKey > rec.endDate) break;
     if (matchesRecurrencePattern(ev.date, rec, curKey)) {
       if (hasCount && matchIndex >= rec.endCount) break;
-      if (curKey >= rangeStartKey && !excluded.has(curKey)) {
-        result.push({ ...ev, date: curKey, occurrenceDate: curKey, masterId: ev.id, isRecurring: true });
+      if (!excluded.has(curKey)) {
+        const spanEnd = span ? addDaysToKey(curKey, span) : curKey;
+        if (spanEnd >= rangeStartKey) {
+          for (let k = curKey, d = 0; d <= span; k = addDaysToKey(k, 1), d++) {
+            if (k >= rangeStartKey && k <= rangeEndKey) {
+              result.push({ ...ev, date: curKey, occurrenceDate: k, masterId: ev.id, isRecurring: true, instanceDate: curKey, spanEnd });
+            }
+          }
+        }
       }
       matchIndex += 1;
     }

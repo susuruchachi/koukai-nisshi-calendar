@@ -36,7 +36,7 @@ function koukaiBuildWidgetData(events, diary, feeds) {
       (days[k] = days[k] || []).push({
         s: o.allDay ? '' : (o.startTime || ''),
         e: o.allDay ? '' : (o.endTime || ''),
-        n: o.title || '',
+        n: (o.title || '') + koukaiSpanLabel(o),
         i: (typeof TYPE_ICONS !== 'undefined' && TYPE_ICONS[o.type]) || '',
       });
     });
@@ -45,7 +45,7 @@ function koukaiBuildWidgetData(events, diary, feeds) {
   try {
     ankiFeedOccurrences(feeds || [], start, end).forEach((o) => {
       (days[o.occurrenceDate] = days[o.occurrenceDate] || []).push({
-        s: o.allDay ? '' : (o.startTime || ''), e: o.allDay ? '' : (o.endTime || ''), n: o.title || '',
+        s: o.allDay ? '' : (o.startTime || ''), e: o.allDay ? '' : (o.endTime || ''), n: (o.title || '') + koukaiSpanLabel(o),
         i: (typeof TYPE_ICONS !== 'undefined' && TYPE_ICONS[o.type]) || '',
       });
     });
@@ -59,6 +59,13 @@ function koukaiBuildWidgetData(events, diary, feeds) {
     if (diaryHasContent(e)) d[k] = { items: e.items, anki: e.anki };
   });
   return { today, days, diary: d, at: Date.now() };
+}
+
+// 何日か続く予定は、ウィジェットで「（〜11/27）」と最後の日を出す
+function koukaiSpanLabel(o) {
+  if (!o.spanEnd || !o.instanceDate || o.spanEnd <= o.instanceDate) return '';
+  const p = parseDateKey(o.spanEnd);
+  return `（〜${p.month + 1}/${p.day}）`;
 }
 
 let _koukaiWidgetTimer = null;

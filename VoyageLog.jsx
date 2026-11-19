@@ -11,6 +11,7 @@ const emptyForm = (dateStr) => ({
   id: null,
   title: '',
   date: dateStr,
+  end: '', // 何日か続く予定の最後の日（1日だけなら空）
   allDay: false,
   startTime: '09:00',
   endTime: '10:00',
@@ -303,6 +304,7 @@ function VoyageLog() {
       id: master.id,
       title: master.title,
       date: master.date,
+      end: master.end && master.end > master.date ? master.end : '',
       allDay: master.allDay,
       startTime: master.startTime,
       endTime: master.endTime,
@@ -321,9 +323,28 @@ function VoyageLog() {
       showToast('タイトルを入力してください', 'error');
       return;
     }
-    if (!form.allDay && form.recurrence.freq !== 'none' && form.recurrence.endType === 'until' && form.recurrence.endDate && form.recurrence.endDate < form.date) {
-      showToast('終了日は開始日より後にしてください', 'error');
+    if (form.recurrence.freq !== 'none' && form.recurrence.endType === 'until' && form.recurrence.endDate && form.recurrence.endDate < form.date) {
+      showToast('繰り返しの終了日は開始日より後にしてください', 'error');
       return;
+    }
+    const endDay = form.end && form.end > form.date ? form.end : '';
+    if (form.end && form.end < form.date) {
+      showToast('最後の日は、はじめの日より後にしてください', 'error');
+      return;
+    }
+    // 何日か続く予定を繰り返すとき：1回の長さが、次の回までの間より短いこと（重ならないように）
+    if (endDay && form.recurrence.freq !== 'none') {
+      const span = eventSpanDays({ date: form.date, end: endDay });
+      const iv = Math.max(1, parseInt(form.recurrence.interval, 10) || 1);
+      let gap = { daily: iv, weekly: 7 * iv, monthly: 28 * iv, yearly: 365 * iv }[form.recurrence.freq] || 1;
+      if (form.recurrence.freq === 'weekly' && form.recurrence.daysOfWeek.length > 1) {
+        const ds = [...form.recurrence.daysOfWeek].sort((a, b) => a - b);
+        ds.forEach((d, i) => { gap = Math.min(gap, i + 1 < ds.length ? ds[i + 1] - d : ds[0] + 7 - d); });
+      }
+      if (span >= gap) {
+        showToast(`${span + 1}日続く予定は、この繰り返しだと次の回と重なります`, 'error');
+        return;
+      }
     }
 
     const recurrenceToSave = form.recurrence && form.recurrence.freq !== 'none'
@@ -340,13 +361,14 @@ function VoyageLog() {
     const baseData = {
       title: form.title.trim(),
       date: form.date,
+      end: endDay,
       allDay: form.allDay,
       startTime: form.startTime,
       endTime: form.endTime,
       location: form.location,
       notes: form.notes,
       recurrence: recurrenceToSave,
-      excludedDates: recurrenceToSave ? (form.excludedDates || []) : [],
+      excludedDates: recurrenceToSave || endDay ? (form.excludedDates || []) : [],
     };
 
     let next;
@@ -381,7 +403,7 @@ function VoyageLog() {
   const handleExportOne = (ev) => {
     // 繰り返し予定の場合、この一覧項目が指す「その回」だけを単発の予定として書き出す
     const single = ev.isRecurring
-      ? { ...ev, id: `${ev.masterId}-${ev.occurrenceDate}`, date: ev.occurrenceDate, recurrence: null, excludedDates: [] }
+      ? { ...ev, id: `${ev.masterId}-${ev.instanceDate || ev.occurrenceDate}`, date: ev.instanceDate || ev.occurrenceDate, end: ev.spanEnd && ev.spanEnd > (ev.instanceDate || '') ? ev.spanEnd : '', recurrence: null, excludedDates: [] }
       : ev;
     const ics = buildICS([single]);
     downloadICS(`${sanitizeFilename(ev.title)}.ics`, ics);
@@ -569,8 +591,25 @@ function VoyageLog() {
                     ✦
                   </span>
                 )}
+                {(() => {
+                  // 何日か続く予定は、日をまたいでつながる帯で出す（1つめだけ）
+                  const m = dayEvents.find((e) => e.spanEnd && e.instanceDate && e.spanEnd > e.instanceDate);
+                  if (!m) return null;
+                  const first = cell.key === m.instanceDate, last = cell.key === m.spanEnd;
+                  return (
+                    <span
+                      className="absolute bottom-0.5 h-1"
+                      style={{
+                        left: first ? '20%' : '-1px', right: last ? '20%' : '-1px',
+                        background: 'var(--brass)', opacity: 0.75,
+                        borderRadius: `${first ? 3 : 0}px ${last ? 3 : 0}px ${last ? 3 : 0}px ${first ? 3 : 0}px`,
+                      }}
+                      aria-hidden="true"
+                    />
+                  );
+                })()}
                 <span className="flex gap-0.5 h-1.5 mt-1">
-                  {dayEvents.slice(0, 3).map((ev) => (
+                  {dayEvents.filter((e) => !(e.spanEnd && e.instanceDate && e.spanEnd > e.instanceDate)).slice(0, 3).map((ev) => (
                     <span key={ev.id} className="w-1 h-1 rounded-full" style={{ backgroundColor: 'var(--signal)' }} />
                   ))}
                 </span>
@@ -608,6 +647,11 @@ function VoyageLog() {
                       <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--signal)' }}>
                         {ev.allDay ? '終日' : `${ev.startTime}–${ev.endTime}`}
                       </p>
+                      {ev.spanEnd && ev.instanceDate && ev.spanEnd > ev.instanceDate && (
+                        <p className="font-mono text-[11px] mt-0.5" style={{ color: 'var(--brass-bright)' }}>
+                          {formatMD(ev.instanceDate)}〜{formatMD(ev.spanEnd)}・{eventSpanDays({ date: ev.instanceDate, end: ev.occurrenceDate }) + 1}日目／{eventSpanDays({ date: ev.instanceDate, end: ev.spanEnd }) + 1}日間
+                        </p>
+                      )}
                       {ev.isRecurring && (
                         <p className="text-[11px] mt-0.5" style={{ color: 'var(--parchment-dim)' }}>
                           {RECURRENCE_LABELS[ev.recurrence.freq]}
@@ -641,7 +685,7 @@ function VoyageLog() {
                         ev.isRecurring ? (
                           <div className="flex items-center gap-1">
                             <button
-                              onClick={() => handleDeleteOccurrence(ev.masterId, ev.occurrenceDate)}
+                              onClick={() => handleDeleteOccurrence(ev.masterId, ev.instanceDate || ev.occurrenceDate)}
                               className="font-mono text-[10px] px-1.5 py-1.5 rounded-md whitespace-nowrap"
                               style={{ color: '#fff', backgroundColor: 'var(--danger)' }}
                             >
@@ -890,15 +934,54 @@ function VoyageLog() {
                 />
               </label>
 
-              <label className="field block">
-                <span className="text-xs font-medium block mb-1">日付</span>
-                <input
-                  type="date"
-                  value={form.date}
-                  onChange={(e) => setForm({ ...form, date: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg text-sm font-mono"
-                />
-              </label>
+              <div className="flex gap-2 items-end">
+                <label className="field block flex-1">
+                  <span className="text-xs font-medium block mb-1">{form.end ? 'はじめの日' : '日付'}</span>
+                  <input
+                    type="date"
+                    value={form.date}
+                    onChange={(e) => {
+                      // はじめの日を動かしたら、何日続くかはそのままで最後の日も動かす
+                      const d = e.target.value;
+                      const len = form.end && form.end > form.date ? eventSpanDays({ date: form.date, end: form.end }) : 0;
+                      setForm({ ...form, date: d, end: len && d ? addDaysToKey(d, len) : form.end });
+                    }}
+                    className="w-full px-3 py-2 rounded-lg text-sm font-mono"
+                  />
+                </label>
+                {form.end ? (
+                  <label className="field block flex-1">
+                    <span className="text-xs font-medium block mb-1">最後の日</span>
+                    <input
+                      type="date"
+                      value={form.end}
+                      min={form.date}
+                      onChange={(e) => setForm({ ...form, end: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg text-sm font-mono"
+                    />
+                  </label>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, end: addDaysToKey(form.date, 1), allDay: true })}
+                    className="shrink-0 text-xs px-3 py-2 rounded-lg"
+                    style={{ border: '1px solid var(--chart-line)', background: '#fff', color: 'var(--ink-deep)' }}
+                  >
+                    ＋ 何日か続く
+                  </button>
+                )}
+              </div>
+              {form.end && (
+                <div className="flex items-center justify-between -mt-1">
+                  <p className="text-[11px]" style={{ color: '#5B6D7A' }}>
+                    {form.end > form.date ? `${eventSpanDays({ date: form.date, end: form.end }) + 1}日間（${formatMD(form.date)}〜${formatMD(form.end)}）` : '最後の日を選んでください'}
+                    {!form.allDay && '・時刻は毎日の時刻'}
+                  </p>
+                  <button type="button" onClick={() => setForm({ ...form, end: '' })} className="text-[11px] underline" style={{ background: 'transparent', color: '#5B6D7A' }}>
+                    1日だけにする
+                  </button>
+                </div>
+              )}
 
               <label className="flex items-center gap-2 text-sm">
                 <input
@@ -940,7 +1023,7 @@ function VoyageLog() {
                   onChange={(e) => setForm({ ...form, recurrence: { ...form.recurrence, freq: e.target.value } })}
                   className="w-full px-3 py-2 rounded-lg text-sm"
                 >
-                  <option value="none">繰り返さない</option>
+                  <option value="none">{form.end ? '繰り返さない（この期間だけ）' : '繰り返さない'}</option>
                   <option value="daily">毎日</option>
                   <option value="weekly">毎週</option>
                   <option value="monthly">毎月</option>
@@ -1035,6 +1118,11 @@ function VoyageLog() {
                     </label>
                   )}
 
+                  {form.end && form.end > form.date && (
+                    <p className="text-[11px] leading-relaxed" style={{ color: '#5B6D7A' }}>
+                      ※ 毎回{eventSpanDays({ date: form.date, end: form.end }) + 1}日間続きます（繰り返しの日が、その回のはじめの日）
+                    </p>
+                  )}
                   {form.id && (
                     <p className="text-[11px] leading-relaxed" style={{ color: '#5B6D7A' }}>
                       ※ 変更はこの繰り返し予定シリーズ全体に適用されます

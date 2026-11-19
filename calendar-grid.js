@@ -33,3 +33,9 @@ function formatSelectedHeading(key) {
   const wd = WEEKDAYS_JA[dt.getDay()];
   return `${month + 1}月${day}日 (${wd})`;
 }
+
+// 'YYYY-MM-DD' → '11/25(水)'
+function formatMD(key) {
+  const { year, month, day } = parseDateKey(key);
+  return `${month + 1}/${day}(${WEEKDAYS_JA[new Date(year, month, day).getDay()]})`;
+}

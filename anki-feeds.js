@@ -146,6 +146,7 @@ function ankiFeedOccurrences(list, startKey, endKey) {
       allDay: !ev.start, startTime: ev.start || '', endTime: ev.endTime || ev.start || '',
       location: ev.place || '', notes: ev.note || '', type: ev.type || 'event',
       readOnly: true, source, isRecurring: !!(ev.repeat || ev.rec),
+      instanceDate: ev.date, spanEnd: !ev.repeat && !ev.rec && ev.end && ev.end > ev.date ? ev.end : ev.date,
       recurrence: ev.rec || (ev.repeat ? { freq: 'weekly', interval: ev.repeat === 'biweekly' ? 2 : 1 } : null),
     };
     if (ev.rec && ev.rec.freq && ev.rec.freq !== 'none') {
