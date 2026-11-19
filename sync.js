@@ -7,6 +7,8 @@
 // ・同期をオンにしたときだけ動く（オフなら今までどおり、この端末の中だけ）
 // ・できた事日記（diary.js）も、同じ文書の diary = { 'YYYY-MM-DD': { items, anki, at } } に入れる（日ごとに新しい方を使う）
 //   すするanki は events しか読まないので、diary を足してもすするanki には影響しない
+// ・すするanki の毎日の記録 susuru_anki_logs/{日付}_{uid} = { answered: 解いた数, correct: 正解した数 }（すするanki が1問ごとに書く・本人は読める）を
+//   読んで、できた事日記の「すするanki でできた単語」に使う（ログインしていれば、同期がオフでも読む。こちらからは書かない）
 (function () {
   const FIREBASE_CONFIG = {
     apiKey: 'AIzaSyAGoYBRoupEFHng_cXoiHmZf9eAlX8ZCHA', authDomain: 'susuruanki.firebaseapp.com',
@@ -20,6 +22,8 @@
   let auth = null, db = null, user = null, unsub = null, remote = {}, remoteDiary = {}, ready = false, lastError = '';
   let getLocal = () => [], applyLocal = () => {};
   let getDiary = null, applyDiary = () => {};
+  let ankiLogs = {}, ankiUnsub = null, ankiToday = '';
+  const ankiAsked = new Set();
   const listeners = new Set();
 
   const isOn = () => { try { return localStorage.getItem(ON_KEY) === '1'; } catch (e) { return false; } };
@@ -32,6 +36,7 @@
       available: !!db, on: isOn(), ready, error: lastError,
       user: user ? { name: user.displayName || user.email || '', email: user.email || '' } : null,
       count: Object.values(remote).filter((x) => x && !x.deleted).length,
+      ankiLogs,
     };
   }
   function emit() { const s = state(); listeners.forEach((fn) => { try { fn(s); } catch (e) {} }); }
@@ -110,11 +115,45 @@
       if (!e || !e.at) return;
       const r = remoteDiary[day];
       if (r && (r.at || 0) >= e.at) return;
-      up[day] = clean({ items: e.items || [], anki: e.anki === undefined ? null : e.anki, at: e.at });
+      up[day] = clean({ items: e.items || [], anki: e.anki === undefined ? null : e.anki, ankiAuto: e.ankiAuto, at: e.at });
     });
     if (!Object.keys(up).length) return;
     db.collection('susuru_anki_cal').doc(user.uid).set({ diary: up, updatedAt: Date.now() }, { merge: true })
       .catch((e) => { lastError = e.code || e.message; emit(); });
+  }
+
+  // すするanki の毎日の記録：今日の分はずっと見ておき（解くたびに増える）、ほかの日は頼まれたら1回読む
+  function localDay() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  function setAnkiLog(day, data) {
+    const v = data ? { answered: data.answered || 0, correct: data.correct || 0 } : { answered: 0, correct: 0 };
+    const o = ankiLogs[day];
+    if (o && o.answered === v.answered && o.correct === v.correct) return;
+    ankiLogs = { ...ankiLogs, [day]: v };
+    emit();
+  }
+  function watchAnkiToday() {
+    if (!user || !db) return;
+    const day = localDay();
+    if (ankiUnsub && ankiToday === day) return;
+    if (ankiUnsub) { try { ankiUnsub(); } catch (e) {} }
+    ankiToday = day;
+    ankiUnsub = db.collection('susuru_anki_logs').doc(`${day}_${user.uid}`)
+      .onSnapshot((snap) => setAnkiLog(day, snap.exists ? snap.data() : null), () => {});
+  }
+  function stopAnki() {
+    if (ankiUnsub) { try { ankiUnsub(); } catch (e) {} ankiUnsub = null; }
+    ankiToday = ''; ankiLogs = {}; ankiAsked.clear();
+  }
+  function askAnkiDay(day) {
+    if (!user || !db || !/^\d{4}-\d{2}-\d{2}$/.test(day || '')) return;
+    if (day === localDay()) { watchAnkiToday(); return; }
+    if (ankiAsked.has(day) || day > localDay()) return;
+    ankiAsked.add(day);
+    db.collection('susuru_anki_logs').doc(`${day}_${user.uid}`).get()
+      .then((snap) => setAnkiLog(day, snap.exists ? snap.data() : null), () => { ankiAsked.delete(day); });
   }
 
   function start() {
@@ -151,7 +190,9 @@
     try {
       if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
       auth = firebase.auth(); db = firebase.firestore();
-      auth.onAuthStateChanged((u) => { user = u; start(); });
+      auth.onAuthStateChanged((u) => { user = u; stopAnki(); if (u) watchAnkiToday(); start(); });
+      // 日付が変わったら、新しい今日の記録を見る（アプリを開いたままでも）
+      setInterval(() => { if (user && ankiToday && ankiToday !== localDay()) watchAnkiToday(); }, 60000);
       auth.getRedirectResult().catch(() => {});
       takeNativeLogin();
     } catch (e) { lastError = e.message; }
@@ -179,6 +220,8 @@
     // できた事日記（diary.js）：今の日記を読む関数と、日記を入れかえる関数
     attachDiary(getFn, applyFn) { getDiary = getFn; applyDiary = applyFn; if (ready) mergeDiary(); },
     pushDiary,
+    // すするanki のその日の記録（{ answered, correct }）を読む。届いたら subscribe の state.ankiLogs に入る
+    askAnkiDay,
     subscribe(fn) { listeners.add(fn); fn(state()); return () => listeners.delete(fn); },
     state,
     setOn(on) { try { localStorage.setItem(ON_KEY, on ? '1' : '0'); } catch (e) {} start(); },

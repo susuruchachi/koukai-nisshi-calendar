@@ -71,7 +71,9 @@ function VoyageLog() {
             try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (e) {}
           });
           // できた事日記も同期：向こうで書いた日が届いたら入れかえる
-          window.VoyageSync.attachDiary(() => diaryRef.current, (next) => {
+          window.VoyageSync.attachDiary(() => diaryRef.current, (raw) => {
+            const next = {};
+            Object.keys(raw).forEach((k) => { next[k] = normalizeDiaryEntry(raw[k]); });
             diaryRef.current = next;
             setDiary(next);
             saveDiaryLocal(next);
@@ -158,14 +160,14 @@ function VoyageLog() {
   }, []);
 
   // 日記を1日ぶん書きかえる（この端末にはすぐ保存、同期は打ち終わってから送る）
-  const updateDiary = useCallback((key, patch) => {
+  const updateDiary = useCallback((key, patch, opts = {}) => {
     const prev = diaryRef.current[key] || emptyDiaryEntry();
     const entry = { ...prev, ...patch, at: Date.now() };
     const next = { ...diaryRef.current, [key]: entry };
     diaryRef.current = next;
     setDiary(next);
     if (!saveDiaryLocal(next)) { showToast('日記を保存できませんでした', 'error'); return; }
-    setDiarySaved(true);
+    if (!opts.silent) setDiarySaved(true);
     if (diarySavedTimer.current) clearTimeout(diarySavedTimer.current);
     diarySavedTimer.current = setTimeout(() => setDiarySaved(false), 1500);
     if (diaryPushTimer.current) clearTimeout(diaryPushTimer.current);
@@ -225,6 +227,25 @@ function VoyageLog() {
   const selDone = diaryDoneCount(selDiary);
   const isFutureDay = selectedKey > todayStr;
   const diaryStreakDays = useMemo(() => diaryStreak(diary, todayStr), [diary, todayStr]);
+  // すするanki の記録（その日の正解数＝できた単語・解いた数）。ログインしていれば sync.js が読む
+  const ankiLogs = (sync && sync.ankiLogs) || {};
+  const selAnkiLog = ankiLogs[selectedKey] || null;
+  const loggedIn = !!(sync && sync.user);
+  useEffect(() => {
+    if (loggedIn && window.VoyageSync && window.VoyageSync.askAnkiDay) window.VoyageSync.askAnkiDay(selectedKey);
+  }, [loggedIn, selectedKey]);
+  // 自動で入れる：今日と、できた事を書いた日だけ（見ただけの日に日記を作らない）。自分で入れた数（ankiAuto: false）は上書きしない
+  useEffect(() => {
+    Object.entries(ankiLogs).forEach(([day, log]) => {
+      if (!log || day > todayStr) return;
+      const e = diaryRef.current[day] || emptyDiaryEntry();
+      if (e.ankiAuto === false) return;
+      if (day !== todayStr && diaryDoneCount(e) === 0) return;
+      if (log.correct === 0 && e.anki === null) return;
+      if (e.anki === log.correct && e.ankiAuto === true) return;
+      updateDiary(day, { anki: log.correct, ankiAuto: true }, { silent: true });
+    });
+  }, [ankiLogs, diary, todayStr, updateDiary]);
 
   const selectDay = (key) => {
     setSelectedKey(key);
@@ -703,13 +724,39 @@ function VoyageLog() {
                 disabled={isFutureDay}
                 onChange={(e) => {
                   const v = e.target.value === '' ? null : Math.max(0, Math.min(99999, parseInt(e.target.value, 10) || 0));
-                  updateDiary(selectedKey, { anki: v });
+                  updateDiary(selectedKey, { anki: v, ankiAuto: false });
                 }}
                 placeholder="0"
                 className="diary-input w-20 ml-auto px-2 py-2 rounded-lg text-sm font-mono text-right"
               />
               <span className="text-xs shrink-0" style={{ color: 'var(--parchment-dim)' }}>語</span>
             </div>
+            {!isFutureDay && (
+              <div className="text-[11px] mt-1.5 pl-6 flex items-center justify-end gap-2 flex-wrap" style={{ color: 'var(--parchment-dim)' }}>
+                {!loggedIn ? (
+                  <button onClick={() => setSyncOpen(true)} className="underline" style={{ background: 'transparent', color: 'var(--parchment-dim)' }}>
+                    ☁️ ログインすると、すするankiの正解数が自動で入ります
+                  </button>
+                ) : !selAnkiLog ? (
+                  <span>すするankiの記録を読んでいます…</span>
+                ) : (
+                  <>
+                    <span>すするanki：正解 {selAnkiLog.correct}問 ／ 解いた {selAnkiLog.answered}問</span>
+                    {selDiary.anki === selAnkiLog.correct ? (
+                      selDiary.ankiAuto !== false && <span style={{ color: 'var(--signal)' }}>（自動で入れています）</span>
+                    ) : (
+                      <button
+                        onClick={() => updateDiary(selectedKey, { anki: selAnkiLog.correct, ankiAuto: true })}
+                        className="px-2 py-0.5 rounded-md"
+                        style={{ color: 'var(--ink-deep)', background: 'var(--brass)' }}
+                      >
+                        正解数を入れる
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center justify-between mt-2.5 text-[11px] font-mono" style={{ color: 'var(--parchment-dim)' }}>
               <span>

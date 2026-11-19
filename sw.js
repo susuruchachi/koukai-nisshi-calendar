@@ -1,6 +1,6 @@
 // Service Worker: オフラインキャッシュ & PWAインストール要件を満たすため
 // バージョンを上げるとキャッシュが入れ替わります。ファイルを更新したら CACHE_NAME を変更してください。
-const CACHE_NAME = 'voyagelog-cache-v3';
+const CACHE_NAME = 'voyagelog-cache-v4';
 
 const APP_SHELL = [
   './',
