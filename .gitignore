@@ -1,0 +1,7 @@
+# Android（android/）を組み立てたときにできるもの
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.jks
+*.keystore

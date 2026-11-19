@@ -1,5 +1,5 @@
 // --- メインコンポーネント ---
-// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, icons.jsx
+// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, app-bridge.js, icons.jsx
 
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
@@ -38,6 +38,16 @@ function VoyageLog() {
   const [syncOpen, setSyncOpen] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPw, setLoginPw] = useState('');
+  // できた事日記（diary.js）
+  const [diary, setDiary] = useState(() => loadDiary());
+  const diaryRef = useRef(diary);
+  diaryRef.current = diary;
+  const diaryPushTimer = useRef(null);
+  const diarySection = useRef(null);
+  const diaryFirstInput = useRef(null);
+  const [diarySaved, setDiarySaved] = useState(false);
+  const diarySavedTimer = useRef(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -60,6 +70,12 @@ function VoyageLog() {
             setEvents(next);
             try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (e) {}
           });
+          // できた事日記も同期：向こうで書いた日が届いたら入れかえる
+          window.VoyageSync.attachDiary(() => diaryRef.current, (next) => {
+            diaryRef.current = next;
+            setDiary(next);
+            saveDiaryLocal(next);
+          });
         }
       }
     })();
@@ -67,8 +83,71 @@ function VoyageLog() {
   }, []);
 
   useEffect(() => {
-    return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      if (diaryPushTimer.current) clearTimeout(diaryPushTimer.current);
+      if (diarySavedTimer.current) clearTimeout(diarySavedTimer.current);
+    };
   }, []);
+
+  // Android アプリ：予定や日記が変わったら、ホーム画面のウィジェットに渡す
+  useEffect(() => { if (loaded) koukaiSendWidget(events, diary); }, [events, diary, loaded]);
+
+  // 日記の欄へ移る（ウィジェットの「できた事を書く」・?view=diary から）
+  const openDiary = useCallback((key) => {
+    const k = key || todayKey();
+    const { year, month } = parseDateKey(k);
+    setViewYear(year); setViewMonth(month);
+    setSelectedKey(k);
+    setConfirmDelete(null);
+    setTimeout(() => {
+      if (diarySection.current) diarySection.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const e = diaryRef.current[k];
+      if (diaryFirstInput.current && diaryDoneCount(e) < DIARY_SLOTS) diaryFirstInput.current.focus();
+    }, 250);
+  }, []);
+  // その日を開く（ウィジェットのカレンダーの日・今日）
+  const openDay = useCallback((key) => {
+    const k = /^\d{4}-\d{2}-\d{2}$/.test(key || '') ? key : todayKey();
+    const { year, month } = parseDateKey(k);
+    setViewYear(year); setViewMonth(month);
+    setSelectedKey(k);
+    setConfirmDelete(null);
+  }, []);
+  useEffect(() => {
+    window.__koukaiOpen = (view, key) => {
+      setModalOpen(false); setReviewOpen(false); setSyncOpen(false);
+      if (view === 'diary') openDiary(key || undefined);
+      else openDay(view === 'day' ? key : '');
+    };
+    const sv = koukaiStartView();
+    if (sv.view === 'diary') openDiary();
+    else if (sv.view === 'day') openDay(sv.date);
+    // 読み込み直しても同じ画面に飛ばないように、URL から view・date を消しておく
+    if (sv.view) {
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.delete('view'); u.searchParams.delete('date');
+        window.history.replaceState(null, '', u.toString());
+      } catch (e) {}
+    }
+    return () => { window.__koukaiOpen = null; };
+  }, [openDiary, openDay]);
+
+  // Android アプリの戻るボタン：開いている画面を閉じる（閉じたら true）
+  const openLayers = useRef({});
+  openLayers.current = { modalOpen, reviewOpen, syncOpen };
+  useEffect(() => {
+    window.koukaiAppBack = () => {
+      const o = openLayers.current;
+      if (o.modalOpen) { setModalOpen(false); return true; }
+      if (o.reviewOpen) { setReviewOpen(false); return true; }
+      if (o.syncOpen) { setSyncOpen(false); return true; }
+      return false;
+    };
+    return () => { window.koukaiAppBack = null; };
+  }, []);
+
 
   useEffect(() => (window.VoyageSync ? window.VoyageSync.subscribe(setSync) : undefined), []);
 
@@ -77,6 +156,21 @@ function VoyageLog() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2400);
   }, []);
+
+  // 日記を1日ぶん書きかえる（この端末にはすぐ保存、同期は打ち終わってから送る）
+  const updateDiary = useCallback((key, patch) => {
+    const prev = diaryRef.current[key] || emptyDiaryEntry();
+    const entry = { ...prev, ...patch, at: Date.now() };
+    const next = { ...diaryRef.current, [key]: entry };
+    diaryRef.current = next;
+    setDiary(next);
+    if (!saveDiaryLocal(next)) { showToast('日記を保存できませんでした', 'error'); return; }
+    setDiarySaved(true);
+    if (diarySavedTimer.current) clearTimeout(diarySavedTimer.current);
+    diarySavedTimer.current = setTimeout(() => setDiarySaved(false), 1500);
+    if (diaryPushTimer.current) clearTimeout(diaryPushTimer.current);
+    diaryPushTimer.current = setTimeout(() => { if (window.VoyageSync) window.VoyageSync.pushDiary(diaryRef.current); }, 1200);
+  }, [showToast]);
 
   const persist = useCallback(async (nextEvents) => {
     // 同期：変わった予定に「変えた時刻」を付けてから保存し、すするanki 側にも送る
@@ -127,6 +221,10 @@ function VoyageLog() {
   }, [events, occurrenceRange]);
   const selectedEvents = eventsByDate[selectedKey] || [];
   const todayStr = todayKey();
+  const selDiary = diary[selectedKey] || emptyDiaryEntry();
+  const selDone = diaryDoneCount(selDiary);
+  const isFutureDay = selectedKey > todayStr;
+  const diaryStreakDays = useMemo(() => diaryStreak(diary, todayStr), [diary, todayStr]);
 
   const selectDay = (key) => {
     setSelectedKey(key);
@@ -313,6 +411,15 @@ function VoyageLog() {
         .voyage-log .field textarea:focus { outline: 2px solid var(--brass); outline-offset: 0; }
 
         .voyage-log ::selection { background: var(--brass); color: var(--ink-deep); }
+
+        .voyage-log .diary-input {
+          background: var(--ink-deep);
+          border: 1px solid var(--chart-line);
+          color: var(--parchment);
+        }
+        .voyage-log .diary-input::placeholder { color: #5E7180; }
+        .voyage-log .diary-input:focus { outline: 2px solid var(--brass); outline-offset: 0; }
+        .voyage-log .diary-input:disabled { opacity: 0.45; }
       `}</style>
 
       <div className="w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl" style={{ background: 'var(--ink-panel)', border: '1px solid var(--chart-line)' }}>
@@ -398,6 +505,15 @@ function VoyageLog() {
                 >
                   {cell.day}
                 </span>
+                {diaryDoneCount(diary[cell.key]) > 0 && (
+                  <span
+                    className="absolute top-0.5 right-1 text-[9px] leading-none"
+                    style={{ color: diaryDoneCount(diary[cell.key]) >= DIARY_SLOTS ? 'var(--brass-bright)' : 'var(--parchment-dim)' }}
+                    aria-label="できた事日記あり"
+                  >
+                    ✦
+                  </span>
+                )}
                 <span className="flex gap-0.5 h-1.5 mt-1">
                   {dayEvents.slice(0, 3).map((ev) => (
                     <span key={ev.id} className="w-1 h-1 rounded-full" style={{ backgroundColor: 'var(--signal)' }} />
@@ -502,6 +618,112 @@ function VoyageLog() {
               ))}
             </ul>
           )}
+
+          <section
+            ref={diarySection}
+            className="mt-4 rounded-xl p-3.5"
+            style={{ background: 'var(--ink-panel)', border: '1px solid var(--chart-line)', scrollMarginTop: '12px' }}
+            aria-label="できた事日記"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-display text-base flex items-center gap-1.5">
+                <span style={{ color: 'var(--brass-bright)' }}>✦</span>
+                {selectedKey === todayStr ? '今日のできた事' : 'この日のできた事'}
+              </h3>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {diaryStreakDays > 0 && (
+                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={{ color: 'var(--ink-deep)', background: 'var(--signal)' }}>
+                    {diaryStreakDays}日連続
+                  </span>
+                )}
+                <button
+                  onClick={() => setReviewOpen(true)}
+                  className="font-mono text-[11px] px-2 py-1 rounded-md"
+                  style={{ color: 'var(--brass-bright)', border: '1px solid var(--chart-line)', background: 'transparent' }}
+                >
+                  振り返る
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] mt-1 mb-3" style={{ color: 'var(--parchment-dim)' }}>
+              {isFutureDay ? 'まだ先の日です。その日になったら書けます。' : 'どんなに小さなことでも大丈夫。できた事を3つ書こう。'}
+            </p>
+
+            <ol className="space-y-2">
+              {selDiary.items.map((text, i) => (
+                <li key={i} className="flex items-center gap-2">
+                  <span
+                    className="w-5 h-5 shrink-0 rounded-full flex items-center justify-center font-mono text-[11px]"
+                    style={{
+                      background: text.trim() ? 'var(--brass)' : 'transparent',
+                      color: text.trim() ? 'var(--ink-deep)' : 'var(--parchment-dim)',
+                      border: '1px solid ' + (text.trim() ? 'var(--brass)' : 'var(--chart-line)'),
+                    }}
+                    aria-hidden="true"
+                  >
+                    {i + 1}
+                  </span>
+                  <input
+                    ref={i === 0 ? diaryFirstInput : undefined}
+                    type="text"
+                    value={text}
+                    disabled={isFutureDay}
+                    maxLength={200}
+                    onChange={(e) => {
+                      const items = [...selDiary.items];
+                      items[i] = e.target.value;
+                      updateDiary(selectedKey, { items });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+                      const row = e.currentTarget.closest('section');
+                      const inputs = row ? row.querySelectorAll('input') : [];
+                      if (inputs[i + 1]) inputs[i + 1].focus(); else e.currentTarget.blur();
+                    }}
+                    placeholder={DIARY_PLACEHOLDERS[i]}
+                    className="diary-input flex-1 min-w-0 px-3 py-2 rounded-lg text-sm"
+                    aria-label={`できた事 ${i + 1}つ目`}
+                  />
+                </li>
+              ))}
+            </ol>
+
+            <div className="flex items-center gap-2 mt-3 pt-3" style={{ borderTop: '1px dashed var(--chart-line)' }}>
+              <span className="text-sm shrink-0" aria-hidden="true">📚</span>
+              <label htmlFor="diary-anki" className="text-xs shrink-0" style={{ color: 'var(--parchment)' }}>
+                すするankiで<br className="sm:hidden" />できた単語
+              </label>
+              <input
+                id="diary-anki"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={99999}
+                value={selDiary.anki === null ? '' : selDiary.anki}
+                disabled={isFutureDay}
+                onChange={(e) => {
+                  const v = e.target.value === '' ? null : Math.max(0, Math.min(99999, parseInt(e.target.value, 10) || 0));
+                  updateDiary(selectedKey, { anki: v });
+                }}
+                placeholder="0"
+                className="diary-input w-20 ml-auto px-2 py-2 rounded-lg text-sm font-mono text-right"
+              />
+              <span className="text-xs shrink-0" style={{ color: 'var(--parchment-dim)' }}>語</span>
+            </div>
+
+            <div className="flex items-center justify-between mt-2.5 text-[11px] font-mono" style={{ color: 'var(--parchment-dim)' }}>
+              <span>
+                {selDone >= DIARY_SLOTS ? (
+                  <span style={{ color: 'var(--brass-bright)' }}>🎉 3つ書けました！よくがんばりました</span>
+                ) : (
+                  `${selDone} / ${DIARY_SLOTS} 書きました`
+                )}
+              </span>
+              <span style={{ opacity: diarySaved ? 1 : 0, transition: 'opacity 0.3s' }} aria-live="polite">
+                {diarySaved ? '✓ 保存しました' : ''}
+              </span>
+            </div>
+          </section>
         </div>
 
         <div className="px-4 pb-5">
@@ -515,6 +737,23 @@ function VoyageLog() {
           <p className="text-[11px] text-center mt-2 leading-relaxed" style={{ color: 'var(--parchment-dim)' }}>
             PCのGoogleカレンダーで「設定」→「インポート / エクスポート」から取り込めます(スマホアプリからは不可)
           </p>
+          {koukaiAppOutdated() ? (
+            <a
+              href={ANDROID_APK_URL}
+              className="mt-3 w-full flex items-center justify-center gap-2 font-mono text-xs py-2.5 rounded-lg"
+              style={{ color: 'var(--ink-deep)', background: 'var(--brass)' }}
+            >
+              🆕 新しいアプリがあります（ダウンロードして入れ直す）
+            </a>
+          ) : !koukaiIsApp() && /Android/i.test(navigator.userAgent || '') ? (
+            <a
+              href={ANDROID_APK_URL}
+              className="mt-3 w-full flex items-center justify-center gap-2 font-mono text-xs py-2.5 rounded-lg"
+              style={{ color: 'var(--brass-bright)', border: '1px solid var(--chart-line)' }}
+            >
+              🤖 Android アプリ（ホーム画面のウィジェット付き）をダウンロード
+            </a>
+          ) : null}
         </div>
       </div>
 
@@ -743,11 +982,63 @@ function VoyageLog() {
         </div>
       )}
 
+      {reviewOpen && (() => {
+        const ym = `${viewYear}-${pad(viewMonth + 1)}`;
+        const tot = diaryMonthTotals(diary, ym);
+        const keys = Object.keys(diary).filter((k) => k.startsWith(ym) && diaryHasContent(diary[k])).sort().reverse();
+        return (
+          <div className="fixed inset-0 flex items-end sm:items-center justify-center z-50" style={{ background: 'rgba(8,12,16,0.6)' }} onClick={() => setReviewOpen(false)}>
+            <div className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-5 max-h-[85vh] overflow-y-auto" style={{ background: 'var(--parchment)', color: 'var(--ink-deep)' }} onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-display text-lg">✦ {viewYear}年{viewMonth + 1}月のできた事</h3>
+                <button onClick={() => setReviewOpen(false)} aria-label="閉じる" className="p-1" style={{ background: 'transparent', color: 'var(--ink-deep)' }}>
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mb-4 text-center">
+                {[['書いた日', `${tot.days}日`], ['できた事', `${tot.done}個`], ['anki の単語', `${tot.anki}語`]].map(([label, val]) => (
+                  <div key={label} className="rounded-lg py-2" style={{ background: 'rgba(60,90,110,0.1)', border: '1px solid var(--chart-line)' }}>
+                    <div className="font-mono text-base font-semibold">{val}</div>
+                    <div className="text-[10px]" style={{ color: '#5B6D7A' }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              {keys.length === 0 ? (
+                <p className="text-sm text-center py-6" style={{ color: '#5B6D7A' }}>この月の日記はまだありません。<br />カレンダーの月を変えると、ほかの月も見られます。</p>
+              ) : (
+                <ul className="space-y-3">
+                  {keys.map((k) => {
+                    const e = diary[k];
+                    return (
+                      <li key={k}>
+                        <button
+                          onClick={() => { setReviewOpen(false); openDiary(k); }}
+                          className="w-full text-left rounded-lg p-3"
+                          style={{ background: '#fff', border: '1px solid var(--chart-line)', color: 'var(--ink-deep)' }}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-display text-sm">{formatSelectedHeading(k)}</span>
+                            {e.anki !== null && <span className="font-mono text-[11px]" style={{ color: '#5B6D7A' }}>📚 {e.anki}語</span>}
+                          </div>
+                          <ul className="text-xs space-y-0.5">
+                            {e.items.filter((t) => t.trim()).map((t, i) => <li key={i}>・{t}</li>)}
+                          </ul>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {syncOpen && (
         <div className="fixed inset-0 flex items-end sm:items-center justify-center z-50" style={{ background: 'rgba(8,12,16,0.6)' }} onClick={() => setSyncOpen(false)}>
           <div className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-5" style={{ background: 'var(--parchment)', color: 'var(--ink-deep)' }} onClick={(e) => e.stopPropagation()}>
             <h2 className="font-display text-lg mb-2">☁️ すするanki と同期</h2>
-            <p className="text-xs mb-3" style={{ opacity: 0.75 }}>すするanki のカレンダーと、同じアカウントで予定を同期します。どちらで足した・直した・消した予定も、もう一方に届きます。すするanki でも、カレンダーの「🔗 連携」→「⚓ 航海日誌と同期」をオンにしてください。</p>
+            <p className="text-xs mb-3" style={{ opacity: 0.75 }}>すするanki のカレンダーと、同じアカウントで予定を同期します。どちらで足した・直した・消した予定も、もう一方に届きます。すするanki でも、カレンダーの「🔗 連携」→「⚓ 航海日誌と同期」をオンにしてください。できた事日記も、同じアカウントのほかの端末に届きます。</p>
             {!sync || !sync.available ? (
               <p className="text-sm">同期の部品を読み込めませんでした（インターネットにつながっているか確かめてください）。</p>
             ) : !sync.user ? (

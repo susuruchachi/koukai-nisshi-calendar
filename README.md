@@ -12,12 +12,19 @@ index.html          … 全ファイルを読み込むシェル(この順序を�
   │    └─ depends on: constants.js, date-utils.js
   ├─ calendar-grid.js  月表示グリッドの生成
   │    └─ depends on: date-utils.js, constants.js
+  ├─ diary.js          できた事日記（1日3つ＋すするankiの単語数）の保存・連続日数・月の合計
+  │    └─ depends on: date-utils.js
+  ├─ app-bridge.js     Android アプリとのやりとり（ウィジェットに渡すデータ・.ics の保存・ウィジェットから開く）
+  │    └─ depends on: date-utils.js, recurrence.js, diary.js
   ├─ icons.jsx         lucide-react の代わりのインラインSVGアイコン
   └─ VoyageLog.jsx      メインのReactコンポーネント(UI全体)
        └─ depends on: 上記すべて
 
 manifest.json        … PWAの設定(アプリ名・アイコン・表示モード)
 sw.js                 … Service Worker(オフラインキャッシュ、インストール要件を満たすため)
+app-login.html        … Android アプリの Google ログイン用（ブラウザで開いてログインし、アプリに戻る）
+android/              … Android アプリ（WebView 版＋ホーム画面のウィジェット）
+apk/koukai-nisshi.apk … 作った Android アプリ
 icons/                … アプリアイコン一式(16px〜512px、maskable版含む)
 icon-source.svg       … アイコンの元デザイン(編集用)
 ```
@@ -90,6 +97,36 @@ PWA(Progressive Web App)化してあるので、Chromeの「インストール�
 - 予定の形はこのアプリの形に、`at`（変えた時刻）と、すするanki の分（`type`：テスト・授業など、`end`：何日か続く予定の最後の日）を足したもの
 - 新しく変えた方（`at` が大きい方）を使う。消した予定は `{ deleted: true, at }`（この端末の消した記録は `koukai-nisshi-deleted`）
 - 同期がオフなら、今までどおりこの端末の中（localStorage）だけ
+
+## ✦ できた事日記（diary.js）
+
+選んだ日の予定の下に「今日のできた事」の欄があります。
+
+- どんなに小さなことでも、できた事を **3つ** 書く（1〜3の欄。Enter で次の欄へ）
+- 4つ目の欄に、**すするanki でできた単語の数**（語）を入れる
+- 打つとすぐ保存（「✓ 保存しました」）。先の日には書けない。前の日はカレンダーで選べば書き直せる
+- カレンダーの日の右上の ✦ が日記を書いた日（3つ書いた日は明るい ✦）。続けて書いた日数を「○日連続」で出す
+- 「振り返る」：表示中の月の日記の一覧と、書いた日数・できた事の数・すするanki の単語の合計。押すとその日に移る
+- 保存先：localStorage の `koukai-nisshi-diary` = `{ 'YYYY-MM-DD': { items: [3つ], anki: 数 or null, at: 変えた時刻 } }`
+- 同期がオンなら Firestore の `susuru_anki_cal/{uid}` の `diary` に、日ごとに新しい方（`at` が大きい方）を使って入れる
+  （予定と同じ文書なので、Firestore のルールを変えなくてよい。すするanki は `events` しか読まないので影響しない）
+
+## 🤖 Android アプリ（android/・ウィジェット付き）
+
+`apk/koukai-nisshi.apk` を Android の端末で開くと入れられます（「提供元不明のアプリ」の許可が要ることがあります）。
+ウェブ版を Android の WebView でそのまま表示するので、画面の中身はウェブ版（main）を更新すれば自動で新しくなります。
+
+- **ホーム画面のウィジェット**（ホーム画面を長押し →「ウィジェット」→「航海日誌」）
+  - **航海日誌 カレンダー**（4×4）：今月のカレンダー（予定のある日に点・日記を書いた日に ✦・今日は真鍮色）と今日の予定。日を押すとその日が開く
+  - **航海日誌 できた事日記**（4×2）：今日できた事3つ・すするanki の単語数・続けて書いた日数。押すと「今日のできた事」の欄が開いてすぐ書ける
+  - データはアプリを開いたとき（予定・日記を変えたとき）に届く。夜中の0時すぎに「今日」を描き直す
+- **Google ログイン**：WebView の中では Google がログインを許さないので、「Google でログイン」を押すとブラウザで
+  `app-login.html` が開く → ログイン →「アプリに戻る」で戻るとログインできている（アプリが作った合言葉 state を確かめる）。メールでのログインはアプリの中でそのままできる
+- **.ics の書き出し**：アプリでは「ダウンロード」フォルダーに保存する
+- **作り直すとき**（android/ を変えたときだけ）：`android/app/build.gradle` の `versionCode` と `app-bridge.js` の `ANDROID_APK_CODE` を同じ数に上げて、
+  GitHub の Actions →「android-apk」→ Run workflow。署名鍵を Secrets（`KOUKAI_KEYSTORE_B64`・`KOUKAI_KEYSTORE_PASSWORD`）に入れておくと、
+  前のアプリの上から入れ直せる APK になり、`apk/koukai-nisshi.apk` に置かれる。古いアプリを開くと「🆕 新しいアプリがあります」と出る
+- 手元で作るとき：`cd android && gradle assembleRelease`（Android SDK と JDK 17 以上が要る。`KOUKAI_KEYSTORE`・`KOUKAI_KEYSTORE_PASSWORD` で署名鍵を渡す）
 
 ## データの保存先
 

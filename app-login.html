@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex" />
+<title>航海日誌 ログイン</title>
+<!--
+  Android アプリ（android/）の Google ログイン用のページ。
+  アプリの中（WebView）では Google がログインを許さないので、アプリはこのページをブラウザ（Chrome など）で開く。
+  ここで Google にログインし、受け取ったトークンを「アプリに戻る」で koukainisshi://auth に渡す。
+  アプリは state（アプリが作った合言葉）が同じか確かめてから、トークンで Firebase にログインする。
+  トークンはこの端末の中で、アプリに渡すだけ（どこにも送らない）。1時間で使えなくなる。
+-->
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+<style>
+  :root { --ink: #131E29; --panel: #1D2E3D; --line: #3C5A6E; --brass: #C9A15C; --paper: #EDE6D2; --dim: #97A8B5; --danger: #E08A84; }
+  html, body { margin: 0; background: var(--ink); color: var(--paper); font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  main { max-width: 420px; margin: 0 auto; padding: 48px 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px 20px; text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { font-size: 14px; line-height: 1.7; color: var(--dim); margin: 0 0 20px; }
+  button, a.btn { display: block; width: 100%; box-sizing: border-box; padding: 14px; border-radius: 10px; border: 0; font-size: 16px; font-weight: 600; text-decoration: none; cursor: pointer; background: var(--brass); color: var(--ink); }
+  button:disabled { opacity: .5; }
+  .err { color: var(--danger); font-size: 13px; margin-top: 14px; min-height: 1em; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>⚓ 航海日誌にログイン</h1>
+    <div id="step1">
+      <p>すするanki と同じ Google アカウントでログインします。ログインできたら、「アプリに戻る」を押してください。</p>
+      <button id="go" type="button">Google でログイン</button>
+    </div>
+    <div id="step2" class="hidden">
+      <p id="who">ログインできました。</p>
+      <a id="back" class="btn" href="#">アプリに戻る</a>
+    </div>
+    <div id="err" class="err"></div>
+  </div>
+</main>
+<script>
+(function () {
+  const PKG = 'io.github.susuruchachi.koukainisshi';
+  const state = new URLSearchParams(location.hash.slice(1)).get('state') || '';
+  const errEl = document.getElementById('err');
+  const go = document.getElementById('go');
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(state)) {
+    go.disabled = true;
+    errEl.textContent = 'このページは、航海日誌のアプリの「Google でログイン」から開いてください。';
+    return;
+  }
+  firebase.initializeApp({
+    apiKey: 'AIzaSyAGoYBRoupEFHng_cXoiHmZf9eAlX8ZCHA', authDomain: 'susuruanki.firebaseapp.com',
+    projectId: 'susuruanki', appId: '1:926791749187:web:2a96a39d61cbb4d3c7cef6',
+  });
+  const auth = firebase.auth();
+  // このページではログインを覚えておかない（トークンをアプリに渡すだけ）
+  auth.setPersistence(firebase.auth.Auth.Persistence.NONE).catch(function () {});
+
+  go.addEventListener('click', function () {
+    errEl.textContent = '';
+    go.disabled = true;
+    const p = new firebase.auth.GoogleAuthProvider();
+    p.setCustomParameters({ prompt: 'select_account' });
+    auth.signInWithPopup(p).then(function (r) {
+      const c = r.credential || {};
+      if (!c.idToken) throw new Error('Google のトークンを受け取れませんでした');
+      const q = 'state=' + encodeURIComponent(state) + '&id=' + encodeURIComponent(c.idToken) + (c.accessToken ? '&at=' + encodeURIComponent(c.accessToken) : '');
+      const href = 'intent://auth?' + q + '#Intent;scheme=koukainisshi;package=' + PKG + ';end';
+      document.getElementById('back').href = href;
+      document.getElementById('who').textContent = (r.user && (r.user.email || r.user.displayName) || '') + ' でログインできました。';
+      document.getElementById('step1').classList.add('hidden');
+      document.getElementById('step2').classList.remove('hidden');
+      auth.signOut().catch(function () {});
+    }).catch(function (e) {
+      go.disabled = false;
+      errEl.textContent = 'ログインできませんでした（' + (e.code || e.message) + '）';
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 航海日誌の Android アプリ：ウェブ版を WebView で表示し、ホーム画面のウィジェット（カレンダー・できた事日記）を持つ -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/appName"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/appName"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- ブラウザで Google にログインしたあと「アプリに戻る」で戻ってくる（app-login.html → koukainisshi://auth） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="koukainisshi" android:host="auth" />
+            </intent-filter>
+        </activity>
+
+        <!-- ホーム画面のウィジェット：今月のカレンダーと今日の予定 -->
+        <receiver android:name=".CalendarWidget" android:exported="false" android:label="@string/calWidgetName">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_calendar_info" />
+        </receiver>
+
+        <!-- ホーム画面のウィジェット：今日のできた事（3つ）と、すするanki でできた単語の数 -->
+        <receiver android:name=".DiaryWidget" android:exported="false" android:label="@string/diaryWidgetName">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_diary_info" />
+        </receiver>
+    </application>
+</manifest>
