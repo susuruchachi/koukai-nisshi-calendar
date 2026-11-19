@@ -1,6 +1,7 @@
 # 航海日誌の Android アプリ（APK）を作る（手動で実行：Actions → android-apk → Run workflow）
 # 中身はウェブ版をそのまま表示するので、作り直すのはアプリ本体（android/：ウィジェットなど）を変えたときだけで大丈夫です。
-# 作り直すときは、android/app/build.gradle の versionCode と、app-bridge.js の ANDROID_APK_CODE を同じ数に上げてから実行します。
+# 作り直すときは、android/app/build.gradle の versionCode を1つ上げてから実行します。
+# 作った APK を apk/koukai-nisshi.apk に置き、app-bridge.js の ANDROID_APK_CODE を同じ数にすると、入っているアプリが自動で更新されます。
 # 署名鍵：Secrets に KOUKAI_KEYSTORE_B64（.jks を base64 にしたもの）と KOUKAI_KEYSTORE_PASSWORD を入れておく
 #        （無いときは使い捨ての鍵で署名するので、前のアプリを一度アンインストールしないと上書きできません。そのときは apk/ に置きません）
 name: android-apk
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: '作った APK を apk/koukai-nisshi.apk に置く（アプリの中の「新しいアプリがあります」に使われる）'
+        description: '作った APK を apk/koukai-nisshi.apk に置いて、入っているアプリを自動で更新させる（ANDROID_APK_CODE を上げる）'
         type: boolean
         default: true
 
@@ -52,8 +53,10 @@ jobs:
         if: ${{ inputs.publish && env.KOUKAI_KEYSTORE != '' }}
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk apk/koukai-nisshi.apk
+          CODE=$(sed -n 's/^ *versionCode \([0-9]*\).*/\1/p' android/app/build.gradle)
+          sed -i "s/^const ANDROID_APK_CODE = [0-9]*;/const ANDROID_APK_CODE = $CODE;/" app-bridge.js
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apk/koukai-nisshi.apk
-          git commit -m "APK を作り直して置く" || echo "変更なし"
+          git add apk/koukai-nisshi.apk app-bridge.js
+          git commit -m "APK（versionCode $CODE）を置いて、アプリを自動で更新させる" || echo "変更なし"
           git push

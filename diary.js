@@ -1,6 +1,7 @@
 // --- できた事日記（1日に3つ、できた事を書く ＋ すするanki でできた単語の数）---
 // 依存: date-utils.js (todayKey, addDaysToKey)
-// ・この端末の中：localStorage の koukai-nisshi-diary = { 'YYYY-MM-DD': { items: [3つ], anki: 数 or null, at: 変えた時刻 } }
+// ・この端末の中：localStorage の koukai-nisshi-diary = { 'YYYY-MM-DD': { items: [3つ], anki: 数 or null, ankiAuto, at: 変えた時刻 } }
+//   ankiAuto：false＝自分で入れた数（すするanki の記録で上書きしない）。それ以外は、すするanki の正解数を自動で入れる
 // ・同期がオンなら、すするanki と同じ Firestore の文書（susuru_anki_cal/{uid}）の diary に入れる（sync.js）
 
 const DIARY_KEY = 'koukai-nisshi-diary';
@@ -19,6 +20,7 @@ function normalizeDiaryEntry(e) {
   for (let i = 0; i < DIARY_SLOTS; i++) base.items[i] = typeof items[i] === 'string' ? items[i] : '';
   const n = parseInt(e.anki, 10);
   base.anki = Number.isFinite(n) && n >= 0 ? n : null;
+  if (e.ankiAuto === true || e.ankiAuto === false) base.ankiAuto = e.ankiAuto;
   base.at = e.at || 0;
   return base;
 }

@@ -4,6 +4,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 新しい APK を、アプリの中から上書きインストールする（自動更新。初めてのときだけ「この提供元のアプリを許可」を聞かれる） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -49,5 +51,7 @@
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_diary_info" />
         </receiver>
+        <!-- アプリの自動更新（入れた結果・閉じて1分後に起こす） -->
+        <receiver android:name=".InstallResultReceiver" android:exported="false" />
     </application>
 </manifest>
