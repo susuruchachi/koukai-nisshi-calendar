@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- アダプティブアイコン（Android 8 以上）：背景が羅針盤、前景が錨。端末ごとの形（丸・角丸など）に切り抜かれる。元の絵は icon-source.svg -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

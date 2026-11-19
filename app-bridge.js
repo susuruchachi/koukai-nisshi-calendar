@@ -5,7 +5,7 @@
 // ・ウィジェットから開いたとき（「できた事を書く」など）は window.__koukaiOpen(view) が呼ばれる
 
 // 公開している APK の versionCode（android/app/build.gradle と同じ数。GitHub Actions の android-apk が作り直したときに上げる）
-const ANDROID_APK_CODE = 3;
+const ANDROID_APK_CODE = 4;
 // ブラウザ・古いアプリでダウンロードするとき（GitHub）と、アプリが自動で更新するとき（このサイト：アプリはこのサイトの APK しか取らない）
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/koukai-nisshi-calendar/raw/main/apk/koukai-nisshi.apk';
 const ANDROID_APK_SELF_URL = new URL('apk/koukai-nisshi.apk', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();
@@ -36,7 +36,7 @@ function koukaiBuildWidgetData(events, diary, feeds) {
       (days[k] = days[k] || []).push({
         s: o.allDay ? '' : (o.startTime || ''),
         e: o.allDay ? '' : (o.endTime || ''),
-        n: o.title || '',
+        n: (o.title || '') + koukaiSpanLabel(o),
         i: (typeof TYPE_ICONS !== 'undefined' && TYPE_ICONS[o.type]) || '',
       });
     });
@@ -45,7 +45,7 @@ function koukaiBuildWidgetData(events, diary, feeds) {
   try {
     ankiFeedOccurrences(feeds || [], start, end).forEach((o) => {
       (days[o.occurrenceDate] = days[o.occurrenceDate] || []).push({
-        s: o.allDay ? '' : (o.startTime || ''), e: o.allDay ? '' : (o.endTime || ''), n: o.title || '',
+        s: o.allDay ? '' : (o.startTime || ''), e: o.allDay ? '' : (o.endTime || ''), n: (o.title || '') + koukaiSpanLabel(o),
         i: (typeof TYPE_ICONS !== 'undefined' && TYPE_ICONS[o.type]) || '',
       });
     });
@@ -59,6 +59,13 @@ function koukaiBuildWidgetData(events, diary, feeds) {
     if (diaryHasContent(e)) d[k] = { items: e.items, anki: e.anki };
   });
   return { today, days, diary: d, at: Date.now() };
+}
+
+// 何日か続く予定は、ウィジェットで「（〜11/27）」と最後の日を出す
+function koukaiSpanLabel(o) {
+  if (!o.spanEnd || !o.instanceDate || o.spanEnd <= o.instanceDate) return '';
+  const p = parseDateKey(o.spanEnd);
+  return `（〜${p.month + 1}/${p.day}）`;
 }
 
 let _koukaiWidgetTimer = null;

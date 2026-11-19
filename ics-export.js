@@ -43,13 +43,18 @@ function eventToVEVENT(ev) {
   const now = new Date();
   const dtstamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`;
 
-  let dtStartLine, dtEndLine;
+  // 何日か続く予定（end が最後の日）：終日なら DTEND をその次の日に。
+  // 時刻ありで繰り返さないときは「その期間の毎日その時刻」（すするanki と同じ）なので、毎日の繰り返しにして書き出す
+  const multi = ev.end && ev.end > ev.date;
+  const hasRec = ev.recurrence && ev.recurrence.freq !== 'none';
+  let dtStartLine, dtEndLine, dailyRule = null;
   if (ev.allDay) {
     dtStartLine = `DTSTART;VALUE=DATE:${formatICSDateOnly(ev.date)}`;
-    dtEndLine = `DTEND;VALUE=DATE:${formatICSDateOnly(addDaysToKey(ev.date, 1))}`;
+    dtEndLine = `DTEND;VALUE=DATE:${formatICSDateOnly(addDaysToKey(multi ? ev.end : ev.date, 1))}`;
   } else {
     dtStartLine = `DTSTART:${formatICSDateTime(ev.date, ev.startTime || '00:00')}`;
-    dtEndLine = `DTEND:${formatICSDateTime(ev.date, ev.endTime || ev.startTime || '00:00')}`;
+    dtEndLine = `DTEND:${formatICSDateTime(multi && hasRec ? ev.end : ev.date, ev.endTime || ev.startTime || '00:00')}`;
+    if (multi && !hasRec) dailyRule = `FREQ=DAILY;UNTIL=${formatICSDateTime(ev.end, ev.startTime || '00:00')}`;
   }
 
   const lines = [
@@ -63,10 +68,10 @@ function eventToVEVENT(ev) {
   if (ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
   if (ev.notes) lines.push(`DESCRIPTION:${escapeICSText(ev.notes)}`);
 
-  const rrule = buildRRule(ev.recurrence);
+  const rrule = buildRRule(ev.recurrence) || dailyRule;
   if (rrule) lines.push(`RRULE:${rrule}`);
 
-  if (ev.excludedDates && ev.excludedDates.length > 0) {
+  if (rrule && ev.excludedDates && ev.excludedDates.length > 0) {
     if (ev.allDay) {
       lines.push(`EXDATE;VALUE=DATE:${ev.excludedDates.map(formatICSDateOnly).join(',')}`);
     } else {
