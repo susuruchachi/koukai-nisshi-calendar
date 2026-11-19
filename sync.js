@@ -5,6 +5,8 @@
 //   at（変えた時刻）と、すするanki の分（type：テスト・授業など、end：何日か続く予定の最後の日）を足したもの
 // ・新しく変えた方（at が大きい方）を使う。消した予定は { deleted: true, at } で知らせる
 // ・同期をオンにしたときだけ動く（オフなら今までどおり、この端末の中だけ）
+// ・できた事日記（diary.js）も、同じ文書の diary = { 'YYYY-MM-DD': { items, anki, at } } に入れる（日ごとに新しい方を使う）
+//   すするanki は events しか読まないので、diary を足してもすするanki には影響しない
 (function () {
   const FIREBASE_CONFIG = {
     apiKey: 'AIzaSyAGoYBRoupEFHng_cXoiHmZf9eAlX8ZCHA', authDomain: 'susuruanki.firebaseapp.com',
@@ -15,8 +17,9 @@
   const DEL_KEY = 'koukai-nisshi-deleted';
   const SHARED = ['title', 'date', 'allDay', 'startTime', 'endTime', 'location', 'notes', 'recurrence', 'excludedDates', 'type', 'end'];
 
-  let auth = null, db = null, user = null, unsub = null, remote = {}, ready = false, lastError = '';
+  let auth = null, db = null, user = null, unsub = null, remote = {}, remoteDiary = {}, ready = false, lastError = '';
   let getLocal = () => [], applyLocal = () => {};
+  let getDiary = null, applyDiary = () => {};
   const listeners = new Set();
 
   const isOn = () => { try { return localStorage.getItem(ON_KEY) === '1'; } catch (e) { return false; } };
@@ -86,17 +89,62 @@
     db.collection('susuru_anki_cal').doc(user.uid).set({ events: up, updatedAt: Date.now() }, { merge: true })
       .catch((e) => { lastError = e.code || e.message; emit(); });
   }
+  // できた事日記：向こうの方が新しい日をこちらに入れて、こちらの方が新しい日を向こうに書く
+  function mergeDiary() {
+    if (!getDiary) return;
+    const local = getDiary();
+    const next = { ...local };
+    let changed = false;
+    Object.entries(remoteDiary).forEach(([day, r]) => {
+      if (!r || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+      if ((r.at || 0) <= ((next[day] && next[day].at) || 0)) return;
+      next[day] = r; changed = true;
+    });
+    if (changed) applyDiary(next);
+    pushDiary(next);
+  }
+  function pushDiary(map) {
+    if (!ready || !user || !isOn() || !db || !getDiary) return;
+    const up = {};
+    Object.entries(map || getDiary()).forEach(([day, e]) => {
+      if (!e || !e.at) return;
+      const r = remoteDiary[day];
+      if (r && (r.at || 0) >= e.at) return;
+      up[day] = clean({ items: e.items || [], anki: e.anki === undefined ? null : e.anki, at: e.at });
+    });
+    if (!Object.keys(up).length) return;
+    db.collection('susuru_anki_cal').doc(user.uid).set({ diary: up, updatedAt: Date.now() }, { merge: true })
+      .catch((e) => { lastError = e.code || e.message; emit(); });
+  }
+
   function start() {
     if (unsub) { try { unsub(); } catch (e) {} unsub = null; }
-    ready = false; remote = {}; lastError = '';
+    ready = false; remote = {}; remoteDiary = {}; lastError = '';
     if (!user || !isOn() || !db) { emit(); return; }
     unsub = db.collection('susuru_anki_cal').doc(user.uid).onSnapshot((snap) => {
       remote = (snap.exists && snap.data().events) || {};
+      remoteDiary = (snap.exists && snap.data().diary) || {};
       ready = true; lastError = '';
-      merge(); emit();
+      merge(); mergeDiary(); emit();
     }, (e) => { ready = false; lastError = e.code || e.message; emit(); });
     emit();
   }
+
+  // Android アプリ：ブラウザでログインして戻ってきたら、アプリが受け取ったトークンでログインする
+  // （アプリが裏で閉じられて開き直したときも、ページを開いたときにここで受け取る）
+  function takeNativeLogin() {
+    const A = window.KoukaiApp;
+    if (!A || !A.takeLogin || !auth) return;
+    let t = null;
+    try { t = JSON.parse(A.takeLogin() || 'null'); } catch (e) { t = null; }
+    if (!t) return;
+    const wait = window.__koukaiNativeLogin; window.__koukaiNativeLogin = null;
+    if (!t.idToken) { if (wait) wait.reject(new Error(t.error || 'ログインできませんでした')); return; }
+    auth.signInWithCredential(firebase.auth.GoogleAuthProvider.credential(t.idToken, t.accessToken || null))
+      .then((r) => { if (wait) wait.resolve(r); },
+        (e) => { if (wait) wait.reject(e); else { lastError = e.code || e.message; emit(); } });
+  }
+  window.__koukaiLoginArrived = takeNativeLogin;
 
   function init() {
     if (!window.firebase || !firebase.initializeApp) return;
@@ -105,6 +153,7 @@
       auth = firebase.auth(); db = firebase.firestore();
       auth.onAuthStateChanged((u) => { user = u; start(); });
       auth.getRedirectResult().catch(() => {});
+      takeNativeLogin();
     } catch (e) { lastError = e.message; }
   }
 
@@ -127,11 +176,21 @@
       return out;
     },
     push,
+    // できた事日記（diary.js）：今の日記を読む関数と、日記を入れかえる関数
+    attachDiary(getFn, applyFn) { getDiary = getFn; applyDiary = applyFn; if (ready) mergeDiary(); },
+    pushDiary,
     subscribe(fn) { listeners.add(fn); fn(state()); return () => listeners.delete(fn); },
     state,
     setOn(on) { try { localStorage.setItem(ON_KEY, on ? '1' : '0'); } catch (e) {} start(); },
     async signInGoogle() {
       if (!auth) throw new Error('Firebase を読み込めませんでした');
+      // Android アプリ（WebView）の中では Google がログインを許さないので、ブラウザでログインして戻ってくる（app-login.html）
+      if (window.KoukaiApp && window.KoukaiApp.googleSignIn) {
+        return new Promise((resolve, reject) => {
+          window.__koukaiNativeLogin = { resolve, reject };
+          window.KoukaiApp.googleSignIn();
+        });
+      }
       const p = new firebase.auth.GoogleAuthProvider();
       p.setCustomParameters({ prompt: 'select_account' });
       try { await auth.signInWithPopup(p); }

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- できた事日記のウィジェット：今日できた事（3つ）と、すするanki でできた単語の数・続けて書いた日数。押すと書く画面が開く -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/d_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/widget_bg">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical">
+        <TextView android:id="@+id/d_title" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:text="✦ 今日のできた事" android:textSize="14sp" android:textStyle="bold" android:textColor="#E3C384"
+            android:maxLines="1" android:ellipsize="end" />
+        <TextView android:id="@+id/d_streak" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="" android:textSize="11sp" android:textStyle="bold" android:textColor="#7FB69E" />
+    </LinearLayout>
+
+    <TextView android:id="@+id/d_items" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:layout_marginTop="4dp" android:text="タップして、今日できた事を3つ書こう" android:textSize="13sp"
+        android:textColor="#EDE6D2" android:lineSpacingExtra="2dp" android:maxLines="6" android:ellipsize="end" />
+
+    <TextView android:id="@+id/d_anki" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="4dp" android:text="" android:textSize="12sp" android:textColor="#97A8B5"
+        android:maxLines="1" android:ellipsize="end" />
+</LinearLayout>

@@ -91,6 +91,8 @@ function buildICS(eventList) {
 }
 
 function downloadICS(filename, content) {
+  // Android アプリの中では、アプリが「ダウンロード」フォルダーに保存する（app-bridge.js）
+  if (typeof koukaiSaveTextFile === 'function' && koukaiSaveTextFile(filename, 'text/calendar', content)) return;
   const blob = new Blob([content], { type: 'text/calendar;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

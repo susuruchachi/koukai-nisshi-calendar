@@ -1,0 +1,66 @@
+// 航海日誌の Android アプリ（WebView 版）
+// 中身はウェブ版（GitHub Pages）を Android の内蔵部品（Android System WebView）で表示する。
+// 画面の中身はウェブ版を更新すれば自動で新しくなる。APK を作り直すのは、このフォルダー（ウィジェットなど）を変えたときだけ。
+// 作り直したら versionCode を1つ上げ、app-bridge.js の ANDROID_APK_CODE も同じ数にする（アプリの中で「新しいアプリがあります」と出す）
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.susuruchachi.koukainisshi'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'io.github.susuruchachi.koukainisshi'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+
+        def host = 'susuruchachi.github.io'
+        def path = '/koukai-nisshi-calendar/'
+        resValue 'string', 'appName', '航海日誌'
+        resValue 'string', 'calWidgetName', '航海日誌 カレンダー'
+        resValue 'string', 'calWidgetDescription', '今月のカレンダーと今日の予定'
+        resValue 'string', 'diaryWidgetName', '航海日誌 できた事日記'
+        resValue 'string', 'diaryWidgetDescription', '今日できた事3つと、すするanki でできた単語の数'
+        resValue 'string', 'launchUrl', "https://${host}${path}?source=app"
+        resValue 'string', 'loginUrl', "https://${host}${path}app-login.html"
+        resValue 'string', 'hostName', host
+        resValue 'string', 'pathPrefix', path
+    }
+
+    signingConfigs {
+        release {
+            // 署名鍵は環境変数で渡す（GitHub Actions では Secrets の KOUKAI_KEYSTORE_B64 / KOUKAI_KEYSTORE_PASSWORD から）。
+            // 無ければデバッグ用の鍵で署名する（その APK は、前に入れたアプリの上から入れ直せない）
+            def ks = System.getenv('KOUKAI_KEYSTORE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('KOUKAI_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KOUKAI_KEY_ALIAS') ?: 'koukainisshi'
+                keyPassword System.getenv('KOUKAI_KEY_PASSWORD') ?: System.getenv('KOUKAI_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('KOUKAI_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.13.1'
+}
