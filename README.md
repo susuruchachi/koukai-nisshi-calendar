@@ -86,9 +86,11 @@ PWA(Progressive Web App)化してあるので、Chromeの「インストール�
 
 ### アイコンを差し替えたい場合
 
-`icon-source.svg` がデザイン元です。編集後、`icons/` 内の各PNGを作り直してください
-(このプロジェクトではPillowでの再描画スクリプトを使いましたが、Figmaや他のツールで
-書き出しても構いません)。サイズ一覧は `manifest.json` の `icons` 配列を参照してください。
+アイコンは、羅針盤（8方位の星・目盛り・北だけ真鍮色）の上に錨（輪・ストック・柄・爪のある腕）を重ねた絵です。
+`icon-source.svg` はできあがりの見本で、元は `tools/icons/make-svg.py`（`compass`・`anchor` の関数）です。
+直したら `bash tools/icons/make-icons.sh` で、`icons/` の PNG（16〜48px は目盛りを省いた小さい版・maskable 版）と、
+Android の `mipmap-*`（いつものアイコンと、アダプティブアイコンの背景＝羅針盤・前景＝錨）をまとめて作り直します（node と playwright が要る）。
+Android のアイコンを変えたら APK も作り直してください。アプリの中の見出しの錨（`icons.jsx` の `Anchor`）も同じ形です。
 
 ## すするanki と同期（sync.js）
 
