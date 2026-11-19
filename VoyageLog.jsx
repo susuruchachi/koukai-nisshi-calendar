@@ -3,6 +3,9 @@
 
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
+// すするanki から届いた予定の種類（テスト・授業など）の印
+const TYPE_ICONS = { class: '📚', test: '📝', exam: '🗓️', deadline: '⏰' };
+
 const emptyForm = (dateStr) => ({
   id: null,
   title: '',
@@ -28,6 +31,13 @@ function VoyageLog() {
   const [confirmDelete, setConfirmDelete] = useState(null); // { masterId, occurrenceDate, isRecurring }
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
+  // すするanki と同期（sync.js）
+  const eventsRef = useRef([]);
+  eventsRef.current = events;
+  const [sync, setSync] = useState(window.VoyageSync ? window.VoyageSync.state() : null);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPw, setLoginPw] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -35,12 +45,22 @@ function VoyageLog() {
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY);
         if (mounted && raw) {
-          setEvents(JSON.parse(raw));
+          const list = JSON.parse(raw);
+          eventsRef.current = list;
+          setEvents(list);
         }
       } catch (err) {
         // no saved events yet — fine to start with an empty log
       } finally {
         if (mounted) setLoaded(true);
+        // 同期：向こうで変わった予定が届いたら、ここの予定を入れかえる
+        if (mounted && window.VoyageSync) {
+          window.VoyageSync.attach(() => eventsRef.current, (next) => {
+            eventsRef.current = next;
+            setEvents(next);
+            try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (e) {}
+          });
+        }
       }
     })();
     return () => { mounted = false; };
@@ -50,6 +70,8 @@ function VoyageLog() {
     return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
   }, []);
 
+  useEffect(() => (window.VoyageSync ? window.VoyageSync.subscribe(setSync) : undefined), []);
+
   const showToast = useCallback((message, type = 'ok') => {
     setToast({ message, type });
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -57,13 +79,22 @@ function VoyageLog() {
   }, []);
 
   const persist = useCallback(async (nextEvents) => {
-    setEvents(nextEvents);
+    // 同期：変わった予定に「変えた時刻」を付けてから保存し、すするanki 側にも送る
+    const stamped = window.VoyageSync ? window.VoyageSync.stamp(eventsRef.current, nextEvents) : nextEvents;
+    eventsRef.current = stamped;
+    setEvents(stamped);
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextEvents));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stamped));
     } catch (err) {
       showToast('保存に失敗しました', 'error');
     }
+    if (window.VoyageSync) window.VoyageSync.push(stamped);
   }, [showToast]);
+
+  const runSync = async (fn, okMsg) => {
+    try { await fn(); if (okMsg) showToast(okMsg); }
+    catch (e) { showToast(`できませんでした（${e.code || e.message}）`, 'error'); }
+  };
 
   const gridCells = useMemo(() => getMonthGrid(viewYear, viewMonth), [viewYear, viewMonth]);
 
@@ -299,13 +330,23 @@ function VoyageLog() {
               <Anchor size={18} style={{ color: 'var(--brass)' }} aria-hidden="true" />
               <h1 className="font-display text-lg tracking-wide">航海日誌</h1>
             </div>
-            <button
-              onClick={goToday}
-              className="font-mono text-xs px-2.5 py-1.5 rounded-md"
-              style={{ color: 'var(--brass-bright)', border: '1px solid var(--chart-line)', background: 'transparent' }}
-            >
-              今日
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSyncOpen(true)}
+                className="font-mono text-xs px-2.5 py-1.5 rounded-md"
+                style={{ color: sync && sync.on && sync.ready ? 'var(--ink-deep)' : 'var(--brass-bright)', border: '1px solid var(--chart-line)', background: sync && sync.on && sync.ready ? 'var(--brass)' : 'transparent' }}
+                aria-label="すするankiと同期"
+              >
+                {sync && sync.on && sync.ready ? '☁️ 同期中' : '☁️ 同期'}
+              </button>
+              <button
+                onClick={goToday}
+                className="font-mono text-xs px-2.5 py-1.5 rounded-md"
+                style={{ color: 'var(--brass-bright)', border: '1px solid var(--chart-line)', background: 'transparent' }}
+              >
+                今日
+              </button>
+            </div>
           </div>
 
           <div className="relative flex items-center justify-between mt-4">
@@ -390,7 +431,7 @@ function VoyageLog() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate flex items-center gap-1.5">
-                        {ev.title}
+                        {TYPE_ICONS[ev.type] ? `${TYPE_ICONS[ev.type]} ` : ''}{ev.title}
                         {ev.isRecurring && <Repeat size={11} style={{ color: 'var(--brass-bright)' }} aria-label="繰り返し予定" />}
                       </p>
                       <p className="font-mono text-xs mt-0.5" style={{ color: 'var(--signal)' }}>
@@ -698,6 +739,39 @@ function VoyageLog() {
                 保存
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {syncOpen && (
+        <div className="fixed inset-0 flex items-end sm:items-center justify-center z-50" style={{ background: 'rgba(8,12,16,0.6)' }} onClick={() => setSyncOpen(false)}>
+          <div className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-5" style={{ background: 'var(--parchment)', color: 'var(--ink-deep)' }} onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-display text-lg mb-2">☁️ すするanki と同期</h2>
+            <p className="text-xs mb-3" style={{ opacity: 0.75 }}>すするanki のカレンダーと、同じアカウントで予定を同期します。どちらで足した・直した・消した予定も、もう一方に届きます。すするanki でも、カレンダーの「🔗 連携」→「⚓ 航海日誌と同期」をオンにしてください。</p>
+            {!sync || !sync.available ? (
+              <p className="text-sm">同期の部品を読み込めませんでした（インターネットにつながっているか確かめてください）。</p>
+            ) : !sync.user ? (
+              <div className="space-y-2">
+                <button onClick={() => runSync(() => window.VoyageSync.signInGoogle(), 'ログインしました')} className="w-full py-2.5 rounded-lg text-sm font-medium" style={{ background: 'var(--ink-deep)', color: 'var(--parchment)' }}>Google でログイン</button>
+                <p className="text-xs" style={{ opacity: 0.75 }}>すするanki で使っているアカウントでログインしてください。メールアドレスを足してあれば、メールでも入れます。</p>
+                <input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="メールアドレス" className="w-full px-3 py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }} />
+                <input type="password" value={loginPw} onChange={(e) => setLoginPw(e.target.value)} placeholder="パスワード" className="w-full px-3 py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }} />
+                <button onClick={() => runSync(() => window.VoyageSync.signInEmail(loginEmail.trim(), loginPw), 'ログインしました')} className="w-full py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }}>メールでログイン</button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm">ログイン中：{sync.user.name}</p>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={sync.on} onChange={(e) => window.VoyageSync.setOn(e.target.checked)} />
+                  すするanki と予定を同期する
+                </label>
+                <p className="text-xs" style={{ opacity: 0.8 }}>
+                  {!sync.on ? '同期していません（予定はこの端末の中だけ）。' : sync.error ? `⚠️ 同期できません（${sync.error}）` : sync.ready ? `✅ 同期しています（${sync.count}件）` : '⏳ つないでいます…'}
+                </p>
+                <button onClick={() => runSync(() => window.VoyageSync.signOut(), 'ログアウトしました')} className="w-full py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }}>ログアウト</button>
+              </div>
+            )}
+            <button onClick={() => setSyncOpen(false)} className="w-full py-2 rounded-lg text-sm mt-3" style={{ border: '1px solid var(--chart-line)' }}>閉じる</button>
           </div>
         </div>
       )}

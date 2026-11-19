@@ -81,6 +81,16 @@ PWA(Progressive Web App)化してあるので、Chromeの「インストール�
 (このプロジェクトではPillowでの再描画スクリプトを使いましたが、Figmaや他のツールで
 書き出しても構いません)。サイズ一覧は `manifest.json` の `icons` 配列を参照してください。
 
+## すするanki と同期（sync.js）
+
+ヘッダーの「☁️ 同期」から、すするanki と同じアカウント（Google・メール）でログインして「すするanki と予定を同期する」をオンにすると、
+すするanki のカレンダー（「🔗 連携」→「⚓ 航海日誌と同期」をオン）と予定を同期します。
+
+- 置き場所：Firebase（すするanki と同じプロジェクト）の Firestore `susuru_anki_cal/{uid}` = `{ events: { id: 予定 }, updatedAt }`
+- 予定の形はこのアプリの形に、`at`（変えた時刻）と、すするanki の分（`type`：テスト・授業など、`end`：何日か続く予定の最後の日）を足したもの
+- 新しく変えた方（`at` が大きい方）を使う。消した予定は `{ deleted: true, at }`（この端末の消した記録は `koukai-nisshi-deleted`）
+- 同期がオフなら、今までどおりこの端末の中（localStorage）だけ
+
 ## データの保存先
 
 `localStorage` を使っています。キーは `koukai-nisshi-events`。
