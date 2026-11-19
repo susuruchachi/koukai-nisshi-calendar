@@ -48,8 +48,12 @@ function expandEventOccurrences(ev, rangeStartKey, rangeEndKey) {
   const result = [];
 
   if (!rec || rec.freq === 'none') {
-    if (ev.date >= rangeStartKey && ev.date <= rangeEndKey && !excluded.has(ev.date)) {
-      result.push({ ...ev, occurrenceDate: ev.date, masterId: ev.id, isRecurring: false });
+    // 何日か続く予定（すするanki の試験期間など：end が最後の日）は、その間の毎日に出す
+    const last = ev.end && ev.end > ev.date ? ev.end : ev.date;
+    for (let k = ev.date, g = 0; k <= last && g < 400; k = addDaysToKey(k, 1), g++) {
+      if (k >= rangeStartKey && k <= rangeEndKey && !excluded.has(k)) {
+        result.push({ ...ev, occurrenceDate: k, masterId: ev.id, isRecurring: false });
+      }
     }
     return result;
   }
