@@ -4,7 +4,9 @@
 // ・予定の形はこのアプリの形（title, date, allDay, startTime, endTime, location, notes, recurrence, excludedDates）に、
 //   at（変えた時刻）と、すするanki の分（type：テスト・授業など、end：何日か続く予定の最後の日）を足したもの
 // ・新しく変えた方（at が大きい方）を使う。消した予定は { deleted: true, at } で知らせる
-// ・同期をオンにしたときだけ動く（オフなら今までどおり、この端末の中だけ）
+// ・ログインすると同期する（はじめからオン。「同期する」を外した端末は、この端末の中だけ）。同じアカウントのほかの端末（スマホ・パソコン・アプリ）にも届く
+// ・オフラインで変えた分は Firestore がこの端末に覚えておき（enablePersistence）、つながったら送る。ページを閉じても、次に開いたときに at で比べて送り直す
+// ・この端末のデータがどのアカウントのものかを覚えておき（koukai-nisshi-owner）、別のアカウントでログインしたら、前の人の予定・日記を混ぜない
 // ・できた事日記（diary.js）も、同じ文書の diary = { 'YYYY-MM-DD': { items, anki, at } } に入れる（日ごとに新しい方を使う）
 //   すするanki は events しか読まないので、diary を足してもすするanki には影響しない
 // ・すするanki の毎日の記録 susuru_anki_logs/{日付}_{uid} = { answered: 解いた数, correct: 正解した数 }（すするanki が1問ごとに書く・本人は読める）を
@@ -19,9 +21,11 @@
   };
   const ON_KEY = 'koukai-nisshi-sync';
   const DEL_KEY = 'koukai-nisshi-deleted';
+  const OWNER_KEY = 'koukai-nisshi-owner';
   const SHARED = ['title', 'date', 'allDay', 'startTime', 'endTime', 'location', 'notes', 'recurrence', 'excludedDates', 'type', 'end'];
 
   let auth = null, db = null, user = null, unsub = null, remote = {}, remoteDiary = {}, ready = false, lastError = '';
+  let lastSyncAt = 0, pending = false, online = typeof navigator === 'undefined' || navigator.onLine !== false;
   let getLocal = () => [], applyLocal = () => {};
   let getDiary = null, applyDiary = () => {};
   let ankiLogs = {}, ankiUnsub = null, ankiToday = '';
@@ -32,7 +36,7 @@
   const ankiAsked = new Set();
   const listeners = new Set();
 
-  const isOn = () => { try { return localStorage.getItem(ON_KEY) === '1'; } catch (e) { return false; } };
+  const isOn = () => { try { return localStorage.getItem(ON_KEY) !== '0'; } catch (e) { return true; } };
   const loadDels = () => { try { return JSON.parse(localStorage.getItem(DEL_KEY) || '{}') || {}; } catch (e) { return {}; } };
   const saveDels = (d) => { try { localStorage.setItem(DEL_KEY, JSON.stringify(d)); } catch (e) {} };
   const clean = (o) => JSON.parse(JSON.stringify(o)); // undefined を消す（Firestore は undefined を書けない）
@@ -42,6 +46,8 @@
       available: !!db, on: isOn(), ready, error: lastError,
       user: user ? { name: user.displayName || user.email || '', email: user.email || '' } : null,
       count: Object.values(remote).filter((x) => x && !x.deleted).length,
+      diaryDays: Object.values(remoteDiary).filter((x) => x && ((x.items || []).some((t) => t && String(t).trim()) || (x.anki !== null && x.anki !== undefined))).length,
+      lastSyncAt, pending, online,
       ankiLogs,
       feedsOn: feedsOn(),
       feeds: feedsOn() && user ? feedList : [],
@@ -221,10 +227,28 @@
     if (unsub) { try { unsub(); } catch (e) {} unsub = null; }
     ready = false; remote = {}; remoteDiary = {}; lastError = '';
     if (!user || !isOn() || !db) { emit(); return; }
-    unsub = db.collection('susuru_anki_cal').doc(user.uid).onSnapshot((snap) => {
+    const uid = user.uid;
+    let first = true;
+    // includeMetadataChanges：送った分がサーバーに届いたとき（pending が消えたとき）にも知らせてもらう
+    unsub = db.collection('susuru_anki_cal').doc(uid).onSnapshot({ includeMetadataChanges: true }, (snap) => {
+      if (!user || user.uid !== uid) return;
       remote = (snap.exists && snap.data().events) || {};
       remoteDiary = (snap.exists && snap.data().diary) || {};
+      pending = !!snap.metadata.hasPendingWrites;
+      if (!snap.metadata.fromCache && !pending) lastSyncAt = Date.now();
       ready = true; lastError = '';
+      if (first) {
+        first = false;
+        // 前に別のアカウントで同期していたデータなら、そのアカウントの分は混ぜずに、このアカウントのデータにする
+        let owner = '';
+        try { owner = localStorage.getItem(OWNER_KEY) || ''; } catch (e) {}
+        if (owner && owner !== uid) {
+          saveDels({});
+          applyLocal([]);
+          if (getDiary) applyDiary({});
+        }
+        try { localStorage.setItem(OWNER_KEY, uid); } catch (e) {}
+      }
       merge(); mergeDiary(); emit();
     }, (e) => { ready = false; lastError = e.code || e.message; emit(); });
     emit();
@@ -259,6 +283,10 @@
     try {
       if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
       auth = firebase.auth(); db = firebase.firestore();
+      // オフラインで変えた分を、ページを閉じても覚えておく（ほかのタブとも分け合う）。使えない端末では、いつもの（メモリーの中）まま
+      try { if (db.enablePersistence) db.enablePersistence({ synchronizeTabs: true }).catch(() => {}); } catch (e) {}
+      window.addEventListener('online', () => { online = true; emit(); });
+      window.addEventListener('offline', () => { online = false; emit(); });
       auth.onAuthStateChanged((u) => {
         user = u; stopAnki(); if (u) watchAnkiToday();
         // 別のアカウントになった・ログアウトしたら、前の人の見るだけの予定は消す
