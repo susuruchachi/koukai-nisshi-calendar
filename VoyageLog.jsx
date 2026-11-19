@@ -519,9 +519,9 @@ function VoyageLog() {
                 onClick={() => setSyncOpen(true)}
                 className="font-mono text-xs px-2.5 py-1.5 rounded-md"
                 style={{ color: sync && sync.on && sync.ready ? 'var(--ink-deep)' : 'var(--brass-bright)', border: '1px solid var(--chart-line)', background: sync && sync.on && sync.ready ? 'var(--brass)' : 'transparent' }}
-                aria-label="すするankiと同期"
+                aria-label="同期とログイン"
               >
-                {sync && sync.on && sync.ready ? '☁️ 同期中' : '☁️ 同期'}
+                {!sync || !sync.user ? '☁️ ログイン' : !sync.on ? '☁️ 同期オフ' : sync.error ? '⚠️ 同期' : !sync.online ? '📴 オフライン' : sync.pending ? '☁️ 送信中…' : sync.ready ? '☁️ 同期中' : '☁️ 同期'}
               </button>
               <button
                 onClick={goToday}
@@ -1227,8 +1227,11 @@ function VoyageLog() {
       {syncOpen && (
         <div className="fixed inset-0 flex items-end sm:items-center justify-center z-50" style={{ background: 'rgba(8,12,16,0.6)' }} onClick={() => setSyncOpen(false)}>
           <div className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-5" style={{ background: 'var(--parchment)', color: 'var(--ink-deep)' }} onClick={(e) => e.stopPropagation()}>
-            <h2 className="font-display text-lg mb-2">☁️ すするanki と同期</h2>
-            <p className="text-xs mb-3" style={{ opacity: 0.75 }}>すするanki のカレンダーと、同じアカウントで予定を同期します。どちらで足した・直した・消した予定も、もう一方に届きます。すするanki でも、カレンダーの「🔗 連携」→「⚓ 航海日誌と同期」をオンにしてください。できた事日記も、同じアカウントのほかの端末に届きます。</p>
+            <h2 className="font-display text-lg mb-2">☁️ 同期（ほかの端末・すするanki）</h2>
+            <p className="text-xs mb-3 leading-relaxed" style={{ opacity: 0.75 }}>
+              ログインすると、<b>予定とできた事日記</b>が、同じアカウントでログインしたほかの端末（スマホ・パソコン・Android アプリ）に自動で届きます。どの端末で足した・直した・消したものも、ほかの端末に届きます（オフラインのときは、つながったら送ります）。
+              すするanki のカレンダーとも同じ予定になります（すするanki でも、カレンダーの「🔗 連携」→「⚓ 航海日誌と同期」をオンに）。
+            </p>
             {!sync || !sync.available ? (
               <p className="text-sm">同期の部品を読み込めませんでした（インターネットにつながっているか確かめてください）。</p>
             ) : !sync.user ? (
@@ -1240,7 +1243,7 @@ function VoyageLog() {
                   </button>
                 )}
                 {loginErr && <p className="text-xs" style={{ color: 'var(--danger)' }}>⚠️ {loginErr}</p>}
-                <p className="text-xs" style={{ opacity: 0.75 }}>すするanki で使っているアカウントでログインしてください。メールアドレスを足してあれば、メールでも入れます。</p>
+                <p className="text-xs" style={{ opacity: 0.75 }}>どの端末でも、同じアカウント（すするanki で使っているもの）でログインしてください。メールアドレスを足してあれば、メールでも入れます。この端末にある予定・日記は、ログインするとアカウントに入って、ほかの端末に届きます。</p>
                 <input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="メールアドレス" className="w-full px-3 py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }} />
                 <input type="password" value={loginPw} onChange={(e) => setLoginPw(e.target.value)} placeholder="パスワード" className="w-full px-3 py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }} />
                 <button onClick={() => runSync(() => window.VoyageSync.signInEmail(loginEmail.trim(), loginPw), 'ログインしました')} className="w-full py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }}>メールでログイン</button>
@@ -1250,10 +1253,15 @@ function VoyageLog() {
                 <p className="text-sm">ログイン中：{sync.user.name}</p>
                 <label className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={sync.on} onChange={(e) => window.VoyageSync.setOn(e.target.checked)} />
-                  すするanki と予定を同期する
+                  予定とできた事日記を同期する
                 </label>
                 <p className="text-xs" style={{ opacity: 0.8 }}>
-                  {!sync.on ? '同期していません（予定はこの端末の中だけ）。' : sync.error ? `⚠️ 同期できません（${sync.error}）` : sync.ready ? `✅ 同期しています（${sync.count}件）` : '⏳ つないでいます…'}
+                  {!sync.on ? '同期していません（この端末の予定・日記は、この端末の中だけ）。'
+                    : sync.error ? `⚠️ 同期できません（${sync.error}）`
+                    : !sync.online ? '📴 オフラインです。変えた分はこの端末に覚えておき、つながったら送ります。'
+                    : !sync.ready ? '⏳ つないでいます…'
+                    : sync.pending ? '⏳ 送っています…'
+                    : `✅ 同期しています（予定 ${sync.count}件・日記 ${sync.diaryDays}日）${sync.lastSyncAt ? `・${new Date(sync.lastSyncAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} に確認` : ''}`}
                 </p>
                 <label className="flex items-start gap-2 text-sm pt-2" style={{ borderTop: '1px solid var(--chart-line)' }}>
                   <input type="checkbox" className="mt-1" checked={sync.feedsOn} onChange={(e) => window.VoyageSync.setFeedsOn(e.target.checked)} />
