@@ -73,7 +73,13 @@ function expandEventOccurrences(ev, rangeStartKey, rangeEndKey) {
   const hasCount = rec.endType === 'count' && rec.endCount;
   const SAFETY_CAP_DAYS = 7300; // 約20年分。無限ループ防止のガード
 
-  let curKey = ev.date; // 開始日から走査(回数を数えるため、範囲より前からも見る)
+  // 開始日から走査（回数を数えるため）。回数の指定が無ければ、繰り返しの判定は開始日を基準にしているので、
+  // 範囲（何日か続く予定はその日数ぶん前）から見ればよい（昔からの毎年の予定＝誕生日なども、20年の上限に引っかからない）
+  let curKey = ev.date;
+  if (!hasCount) {
+    const from = span ? addDaysToKey(rangeStartKey, -span) : rangeStartKey;
+    if (from > curKey) curKey = from;
+  }
   let matchIndex = 0;
   let iterGuard = 0;
 

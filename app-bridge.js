@@ -1,11 +1,11 @@
 // --- Android アプリ（android/ の WebView 版）とのやりとり ---
-// 依存: date-utils.js, recurrence.js, diary.js, anki-feeds.js
+// 依存: date-utils.js, recurrence.js, diary.js, anki-feeds.js, stars.js
 // ・アプリの中で開いているときだけ window.KoukaiApp がある（MainActivity.java の Bridge）
 // ・ホーム画面のウィジェット（カレンダー・できた事日記）に、予定と日記を渡す（KoukaiApp.setWidgetData）
 // ・ウィジェットから開いたとき（「できた事を書く」など）は window.__koukaiOpen(view) が呼ばれる
 
 // 公開している APK の versionCode（android/app/build.gradle と同じ数。GitHub Actions の android-apk が作り直したときに上げる）
-const ANDROID_APK_CODE = 4;
+const ANDROID_APK_CODE = 5;
 // ブラウザ・古いアプリでダウンロードするとき（GitHub）と、アプリが自動で更新するとき（このサイト：アプリはこのサイトの APK しか取らない）
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/koukai-nisshi-calendar/raw/main/apk/koukai-nisshi.apk';
 const ANDROID_APK_SELF_URL = new URL('apk/koukai-nisshi.apk', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();
@@ -58,7 +58,10 @@ function koukaiBuildWidgetData(events, diary, feeds) {
     const e = diary[k];
     if (diaryHasContent(e)) d[k] = { items: e.items, anki: e.anki };
   });
-  return { today, days, diary: d, at: Date.now() };
+  // ★ 大事な予定（1つの予定につき3回ぶんまで。日付が変わったら、ウィジェットが次の回を出す）
+  let stars = [];
+  try { stars = starInstances(events, feeds, today, 3).slice(0, 60).map(({ n, i, d, e2, s, id }) => ({ k: id, n, i, d, e2, s })); } catch (e) {}
+  return { today, days, diary: d, stars, at: Date.now() };
 }
 
 // 何日か続く予定は、ウィジェットで「（〜11/27）」と最後の日を出す

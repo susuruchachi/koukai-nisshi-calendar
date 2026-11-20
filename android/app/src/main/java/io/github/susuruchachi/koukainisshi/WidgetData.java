@@ -37,6 +37,7 @@ final class WidgetData {
     static void refreshAll(Context ctx) {
         CalendarWidget.updateAll(ctx);
         DiaryWidget.updateAll(ctx);
+        StarWidget.updateAll(ctx);
         scheduleMidnight(ctx);
     }
 
