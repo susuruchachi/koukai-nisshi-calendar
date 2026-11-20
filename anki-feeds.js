@@ -141,25 +141,39 @@ function ankiFeedOccurrences(list, startKey, endKey) {
   const out = [];
   (list || []).forEach(({ id, ev, source }) => {
     if (!ev || !ev.date || ev.deleted) return;
+    const span = ev.end && ev.end > ev.date ? eventSpanDays({ date: ev.date, end: ev.end }) : 0;
     const base = {
       id, masterId: id, title: ev.title || '（名前なし）', date: ev.date,
       allDay: !ev.start, startTime: ev.start || '', endTime: ev.endTime || ev.start || '',
       location: ev.place || '', notes: ev.note || '', type: ev.type || 'event',
-      readOnly: true, source, isRecurring: !!(ev.repeat || ev.rec),
-      instanceDate: ev.date, spanEnd: !ev.repeat && !ev.rec && ev.end && ev.end > ev.date ? ev.end : ev.date,
+      readOnly: true, source, isRecurring: !!(ev.repeat || ev.rec), star: !!ev.star,
       recurrence: ev.rec || (ev.repeat ? { freq: 'weekly', interval: ev.repeat === 'biweekly' ? 2 : 1 } : null),
     };
+    const at = (k, s0) => ({ ...base, occurrenceDate: k, instanceDate: s0, spanEnd: span ? addDaysToKey(s0, span) : s0 });
+    // 航海日誌の形の繰り返し（毎日・毎月・毎年・何回）：recurrence.js で数える（何日か続く予定も、毎回同じ日数）
     if (ev.rec && ev.rec.freq && ev.rec.freq !== 'none') {
-      expandEventOccurrences({ ...base, recurrence: ev.rec, excludedDates: ev.skip || [] }, startKey, endKey)
-        .forEach((o) => out.push({ ...o, ...base, date: o.occurrenceDate, occurrenceDate: o.occurrenceDate }));
+      expandEventOccurrences({ ...base, end: ev.end || '', recurrence: ev.rec, excludedDates: ev.skip || [] }, startKey, endKey)
+        .forEach((o) => out.push(at(o.occurrenceDate, o.instanceDate)));
       return;
     }
-    // 繰り返さない・何日か続く予定は、その日だけを見る。毎週・隔週は範囲の日を順に見る
-    const last = ev.repeat ? (ev.until || endKey) : (ev.end && ev.end > ev.date ? ev.end : ev.date);
+    // 毎週・隔週：その回のはじめの日（skip はその日で見る）から、何日か続く予定なら同じ日数だけ
+    if (ev.repeat) {
+      const startEv = { ...ev, end: '' };
+      const from0 = addDaysToKey(startKey, -span);
+      const from = ev.date > from0 ? ev.date : from0;
+      const to = ev.until && ev.until < endKey ? ev.until : endKey;
+      for (let k = from, g = 0; k <= to && g < 800; k = addDaysToKey(k, 1), g++) {
+        if (!ankiOccursOn(startEv, k)) continue;
+        for (let d = 0; d <= span; d++) { const day = addDaysToKey(k, d); if (day >= startKey && day <= endKey) out.push(at(day, k)); }
+      }
+      return;
+    }
+    // 繰り返さない（何日か続く予定は、その間の毎日。1日ずつ消した日は出さない）
+    const last = span ? ev.end : ev.date;
     const from = ev.date > startKey ? ev.date : startKey;
     const to = last < endKey ? last : endKey;
     for (let k = from, g = 0; k <= to && g < 800; k = addDaysToKey(k, 1), g++) {
-      if (ankiOccursOn(ev, k)) out.push({ ...base, occurrenceDate: k });
+      if (ankiOccursOn(ev, k)) out.push(at(k, ev.date));
     }
   });
   return out;

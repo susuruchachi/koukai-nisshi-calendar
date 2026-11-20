@@ -1,5 +1,5 @@
 // --- メインコンポーネント ---
-// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, anki-feeds.js, app-bridge.js, icons.jsx
+// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, anki-feeds.js, stars.js, app-bridge.js, icons.jsx
 
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
@@ -12,6 +12,7 @@ const emptyForm = (dateStr) => ({
   title: '',
   date: dateStr,
   end: '', // 何日か続く予定の最後の日（1日だけなら空）
+  star: false, // ★ 重要な予定（「★ 大事な予定」の一覧・ウィジェットに、あと何日を出す）
   allDay: false,
   startTime: '09:00',
   endTime: '10:00',
@@ -247,6 +248,8 @@ function VoyageLog() {
   }, [events, feeds, occurrenceRange]);
   const selectedEvents = eventsByDate[selectedKey] || [];
   const todayStr = todayKey();
+  // ★ 大事な予定（いちばん近い回。stars.js）
+  const starList = useMemo(() => starUpcoming(events, feeds, todayStr), [events, feeds, todayStr]);
   const selDiary = diary[selectedKey] || emptyDiaryEntry();
   const selDone = diaryDoneCount(selDiary);
   const isFutureDay = selectedKey > todayStr;
@@ -305,6 +308,7 @@ function VoyageLog() {
       title: master.title,
       date: master.date,
       end: master.end && master.end > master.date ? master.end : '',
+      star: !!master.star,
       allDay: master.allDay,
       startTime: master.startTime,
       endTime: master.endTime,
@@ -369,6 +373,7 @@ function VoyageLog() {
       notes: form.notes,
       recurrence: recurrenceToSave,
       excludedDates: recurrenceToSave || endDay ? (form.excludedDates || []) : [],
+      star: !!form.star,
     };
 
     let next;
@@ -582,6 +587,9 @@ function VoyageLog() {
                 >
                   {cell.day}
                 </span>
+                {dayEvents.some((e) => e.star) && (
+                  <span className="absolute top-0.5 left-1 text-[9px] leading-none" style={{ color: 'var(--brass-bright)' }} aria-label="重要な予定あり">★</span>
+                )}
                 {diaryDoneCount(diary[cell.key]) > 0 && (
                   <span
                     className="absolute top-0.5 right-1 text-[9px] leading-none"
@@ -618,6 +626,29 @@ function VoyageLog() {
           })}
         </div>
 
+        {starList.length > 0 && (
+          <div className="px-4 py-3" style={{ borderTop: '1px solid var(--chart-line)' }} aria-label="大事な予定">
+            <h2 className="font-display text-sm mb-2 flex items-center gap-1.5">
+              <span style={{ color: 'var(--brass-bright)' }}>★</span> 大事な予定
+            </h2>
+            <ul className="space-y-1">
+              {starList.slice(0, 6).map((x) => {
+                const left = starLeftText(x, todayStr);
+                const soon = /今日|明日|期間中/.test(left) || (/^あと(\d+)日$/.test(left) && Number(left.match(/\d+/)[0]) <= 7);
+                return (
+                  <li key={x.id + x.d}>
+                    <button onClick={() => openDay(x.d <= todayStr && x.e2 >= todayStr ? todayStr : x.d)} className="w-full flex items-center gap-2 text-left text-sm py-1" style={{ background: 'transparent', color: 'var(--parchment)' }}>
+                      <span className="font-mono text-[11px] w-16 shrink-0" style={{ color: 'var(--parchment-dim)' }}>{formatMD(x.d)}</span>
+                      <span className="flex-1 min-w-0 truncate">{x.i ? `${x.i} ` : ''}{x.n}{x.e2 ? <span className="text-[11px]" style={{ color: 'var(--parchment-dim)' }}>（〜{formatMD(x.e2)}）</span> : null}</span>
+                      <span className="font-mono text-xs shrink-0 px-1.5 py-0.5 rounded" style={{ color: soon ? 'var(--ink-deep)' : 'var(--brass-bright)', background: soon ? 'var(--brass)' : 'transparent' }}>{left}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         <div className="px-4 pt-4 pb-4" style={{ borderTop: '1px solid var(--chart-line)', background: 'var(--ink-deep)' }}>
           <div className="flex items-center justify-between mb-3 gap-2">
             <h2 className="font-display text-base">{formatSelectedHeading(selectedKey)}</h2>
@@ -641,6 +672,7 @@ function VoyageLog() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate flex items-center gap-1.5">
+                        {ev.star && <span style={{ color: 'var(--brass-bright)' }} aria-label="重要">★</span>}
                         {TYPE_ICONS[ev.type] ? `${TYPE_ICONS[ev.type]} ` : ''}{ev.title}
                         {ev.isRecurring && <Repeat size={11} style={{ color: 'var(--brass-bright)' }} aria-label="繰り返し予定" />}
                       </p>
@@ -982,6 +1014,20 @@ function VoyageLog() {
                   </button>
                 </div>
               )}
+
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, star: !form.star })}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left"
+                style={{ border: '1px solid ' + (form.star ? 'var(--brass)' : 'var(--chart-line)'), background: form.star ? 'rgba(201,161,92,0.18)' : '#fff', color: 'var(--ink-deep)' }}
+                aria-pressed={form.star}
+              >
+                <span className="text-lg leading-none" style={{ color: form.star ? '#A9823F' : '#B8C2CA' }}>{form.star ? '★' : '☆'}</span>
+                <span className="flex-1">
+                  <span className="font-medium">重要な予定</span>
+                  <span className="block text-[11px]" style={{ color: '#5B6D7A' }}>「★ 大事な予定」とウィジェットに、あと何日かを出します</span>
+                </span>
+              </button>
 
               <label className="flex items-center gap-2 text-sm">
                 <input

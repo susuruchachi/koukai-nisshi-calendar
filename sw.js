@@ -1,6 +1,6 @@
 // Service Worker: オフラインキャッシュ & PWAインストール要件を満たすため
 // バージョンを上げるとキャッシュが入れ替わります。ファイルを更新したら CACHE_NAME を変更してください。
-const CACHE_NAME = 'voyagelog-cache-v8';
+const CACHE_NAME = 'voyagelog-cache-v9';
 
 const APP_SHELL = [
   './',
@@ -14,6 +14,7 @@ const APP_SHELL = [
   './calendar-grid.js',
   './diary.js',
   './anki-feeds.js',
+  './stars.js',
   './app-bridge.js',
   './icons.jsx',
   './VoyageLog.jsx',

@@ -15,8 +15,8 @@ android {
         applicationId 'io.github.susuruchachi.koukainisshi'
         minSdk 24
         targetSdk 35
-        versionCode 4
-        versionName '1.3.0'
+        versionCode 5
+        versionName '1.4.0'
 
         def host = 'susuruchachi.github.io'
         def path = '/koukai-nisshi-calendar/'
@@ -25,6 +25,8 @@ android {
         resValue 'string', 'calWidgetDescription', '今月のカレンダーと今日の予定'
         resValue 'string', 'diaryWidgetName', '航海日誌 できた事日記'
         resValue 'string', 'diaryWidgetDescription', '今日できた事3つと、すするanki でできた単語の数'
+        resValue 'string', 'starWidgetName', '航海日誌 大事な予定'
+        resValue 'string', 'starWidgetDescription', '★を付けた予定と、あと何日'
         resValue 'string', 'launchUrl', "https://${host}${path}?source=app"
         resValue 'string', 'loginUrl', "https://${host}${path}app-login.html"
         resValue 'string', 'hostName', host
