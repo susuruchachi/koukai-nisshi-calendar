@@ -5,7 +5,7 @@
 // ・ウィジェットから開いたとき（「できた事を書く」など）は window.__koukaiOpen(view) が呼ばれる
 
 // 公開している APK の versionCode（android/app/build.gradle と同じ数。GitHub Actions の android-apk が作り直したときに上げる）
-const ANDROID_APK_CODE = 5;
+const ANDROID_APK_CODE = 6;
 // ブラウザ・古いアプリでダウンロードするとき（GitHub）と、アプリが自動で更新するとき（このサイト：アプリはこのサイトの APK しか取らない）
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/koukai-nisshi-calendar/raw/main/apk/koukai-nisshi.apk';
 const ANDROID_APK_SELF_URL = new URL('apk/koukai-nisshi.apk', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();

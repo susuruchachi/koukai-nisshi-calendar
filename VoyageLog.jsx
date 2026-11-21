@@ -254,7 +254,7 @@ function VoyageLog() {
   const selDone = diaryDoneCount(selDiary);
   const isFutureDay = selectedKey > todayStr;
   const diaryStreakDays = useMemo(() => diaryStreak(diary, todayStr), [diary, todayStr]);
-  // すするanki の記録（その日の正解数＝できた単語・解いた数）。ログインしていれば sync.js が読む
+  // すするanki の記録（その日に解いた数・正解数）。ログインしていれば sync.js が読む。日記に入れるのは解いた数（answered）
   const ankiLogs = (sync && sync.ankiLogs) || {};
   const selAnkiLog = ankiLogs[selectedKey] || null;
   const loggedIn = !!(sync && sync.user);
@@ -268,9 +268,9 @@ function VoyageLog() {
       const e = diaryRef.current[day] || emptyDiaryEntry();
       if (e.ankiAuto === false) return;
       if (day !== todayStr && diaryDoneCount(e) === 0) return;
-      if (log.correct === 0 && e.anki === null) return;
-      if (e.anki === log.correct && e.ankiAuto === true) return;
-      updateDiary(day, { anki: log.correct, ankiAuto: true }, { silent: true });
+      if (log.answered === 0 && e.anki === null) return;
+      if (e.anki === log.answered && e.ankiAuto === true) return;
+      updateDiary(day, { anki: log.answered, ankiAuto: true }, { silent: true });
     });
   }, [ankiLogs, diary, todayStr, updateDiary]);
 
@@ -784,7 +784,7 @@ function VoyageLog() {
               </div>
             </div>
             <p className="text-[11px] mt-1 mb-3" style={{ color: 'var(--parchment-dim)' }}>
-              {isFutureDay ? 'まだ先の日です。その日になったら書けます。' : 'どんなに小さなことでも大丈夫。できた事を3つ書こう。'}
+              {isFutureDay ? 'まだ先の日です。その日になったら書けます。' : 'どんなに小さなことでも大丈夫。できた事を3つ書こう（もっとあれば「＋」で増やせます）。'}
             </p>
 
             <ol className="space-y-2">
@@ -818,18 +818,46 @@ function VoyageLog() {
                       const inputs = row ? row.querySelectorAll('input') : [];
                       if (inputs[i + 1]) inputs[i + 1].focus(); else e.currentTarget.blur();
                     }}
-                    placeholder={DIARY_PLACEHOLDERS[i]}
+                    placeholder={DIARY_PLACEHOLDERS[i] || '例：ほかにできた事'}
                     className="diary-input flex-1 min-w-0 px-3 py-2 rounded-lg text-sm"
                     aria-label={`できた事 ${i + 1}つ目`}
                   />
+                  {i >= DIARY_SLOTS && !isFutureDay && (
+                    <button
+                      type="button"
+                      onClick={() => updateDiary(selectedKey, { items: selDiary.items.filter((_, k) => k !== i) })}
+                      className="shrink-0 p-1.5 rounded-md"
+                      style={{ color: 'var(--parchment-dim)', background: 'transparent' }}
+                      aria-label={`${i + 1}つ目の欄を消す`}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
                 </li>
               ))}
             </ol>
+            {!isFutureDay && selDiary.items.length < DIARY_MAX && (
+              <button
+                type="button"
+                onClick={() => {
+                  updateDiary(selectedKey, { items: [...selDiary.items, ''] });
+                  // 足した欄にすぐ書けるように
+                  setTimeout(() => {
+                    const ins = diarySection.current ? diarySection.current.querySelectorAll('ol input') : [];
+                    if (ins.length) ins[ins.length - 1].focus();
+                  }, 50);
+                }}
+                className="mt-2 w-full flex items-center justify-center gap-1 text-xs py-1.5 rounded-lg"
+                style={{ color: 'var(--brass-bright)', border: '1px dashed var(--chart-line)', background: 'transparent' }}
+              >
+                <Plus size={13} /> もう1つ書く
+              </button>
+            )}
 
             <div className="flex items-center gap-2 mt-3 pt-3" style={{ borderTop: '1px dashed var(--chart-line)' }}>
               <span className="text-sm shrink-0" aria-hidden="true">📚</span>
               <label htmlFor="diary-anki" className="text-xs shrink-0" style={{ color: 'var(--parchment)' }}>
-                すするankiで<br className="sm:hidden" />できた単語
+                すするankiで<br className="sm:hidden" />解いた数
               </label>
               <input
                 id="diary-anki"
@@ -846,28 +874,28 @@ function VoyageLog() {
                 placeholder="0"
                 className="diary-input w-20 ml-auto px-2 py-2 rounded-lg text-sm font-mono text-right"
               />
-              <span className="text-xs shrink-0" style={{ color: 'var(--parchment-dim)' }}>語</span>
+              <span className="text-xs shrink-0" style={{ color: 'var(--parchment-dim)' }}>問</span>
             </div>
             {!isFutureDay && (
               <div className="text-[11px] mt-1.5 pl-6 flex items-center justify-end gap-2 flex-wrap" style={{ color: 'var(--parchment-dim)' }}>
                 {!loggedIn ? (
                   <button onClick={() => setSyncOpen(true)} className="underline" style={{ background: 'transparent', color: 'var(--parchment-dim)' }}>
-                    ☁️ ログインすると、すするankiの正解数が自動で入ります
+                    ☁️ ログインすると、すするankiで解いた数が自動で入ります
                   </button>
                 ) : !selAnkiLog ? (
                   <span>すするankiの記録を読んでいます…</span>
                 ) : (
                   <>
-                    <span>すするanki：正解 {selAnkiLog.correct}問 ／ 解いた {selAnkiLog.answered}問</span>
-                    {selDiary.anki === selAnkiLog.correct ? (
+                    <span>すするanki：解いた {selAnkiLog.answered}問（正解 {selAnkiLog.correct}問）</span>
+                    {selDiary.anki === selAnkiLog.answered ? (
                       selDiary.ankiAuto !== false && <span style={{ color: 'var(--signal)' }}>（自動で入れています）</span>
                     ) : (
                       <button
-                        onClick={() => updateDiary(selectedKey, { anki: selAnkiLog.correct, ankiAuto: true })}
+                        onClick={() => updateDiary(selectedKey, { anki: selAnkiLog.answered, ankiAuto: true })}
                         className="px-2 py-0.5 rounded-md"
                         style={{ color: 'var(--ink-deep)', background: 'var(--brass)' }}
                       >
-                        正解数を入れる
+                        解いた数を入れる
                       </button>
                     )}
                   </>
@@ -878,7 +906,7 @@ function VoyageLog() {
             <div className="flex items-center justify-between mt-2.5 text-[11px] font-mono" style={{ color: 'var(--parchment-dim)' }}>
               <span>
                 {selDone >= DIARY_SLOTS ? (
-                  <span style={{ color: 'var(--brass-bright)' }}>🎉 3つ書けました！よくがんばりました</span>
+                  <span style={{ color: 'var(--brass-bright)' }}>🎉 {selDone}つ書けました！よくがんばりました</span>
                 ) : (
                   `${selDone} / ${DIARY_SLOTS} 書きました`
                 )}
@@ -1232,7 +1260,7 @@ function VoyageLog() {
                 </button>
               </div>
               <div className="grid grid-cols-3 gap-2 mb-4 text-center">
-                {[['書いた日', `${tot.days}日`], ['できた事', `${tot.done}個`], ['anki の単語', `${tot.anki}語`]].map(([label, val]) => (
+                {[['書いた日', `${tot.days}日`], ['できた事', `${tot.done}個`], ['anki で解いた数', `${tot.anki}問`]].map(([label, val]) => (
                   <div key={label} className="rounded-lg py-2" style={{ background: 'rgba(60,90,110,0.1)', border: '1px solid var(--chart-line)' }}>
                     <div className="font-mono text-base font-semibold">{val}</div>
                     <div className="text-[10px]" style={{ color: '#5B6D7A' }}>{label}</div>
@@ -1254,7 +1282,7 @@ function VoyageLog() {
                         >
                           <div className="flex items-center justify-between mb-1">
                             <span className="font-display text-sm">{formatSelectedHeading(k)}</span>
-                            {e.anki !== null && <span className="font-mono text-[11px]" style={{ color: '#5B6D7A' }}>📚 {e.anki}語</span>}
+                            {e.anki !== null && <span className="font-mono text-[11px]" style={{ color: '#5B6D7A' }}>📚 {e.anki}問</span>}
                           </div>
                           <ul className="text-xs space-y-0.5">
                             {e.items.filter((t) => t.trim()).map((t, i) => <li key={i}>・{t}</li>)}

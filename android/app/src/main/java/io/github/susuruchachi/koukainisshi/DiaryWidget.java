@@ -1,6 +1,6 @@
 package io.github.susuruchachi.koukainisshi;
 
-// できた事日記のウィジェット：今日できた事（3つ）と、すするanki でできた単語の数、続けて書いた日数
+// できた事日記のウィジェット：今日できた事（はじめの3つと、増やして書いたもの）と、すするanki で解いた数、続けて書いた日数
 // 押すと、アプリの「今日のできた事」の欄が開く（まだ書いていない欄にすぐ打てる）
 
 import android.appwidget.AppWidgetManager;
@@ -57,8 +57,10 @@ public class DiaryWidget extends AppWidgetProvider {
             add(t, "どんなに小さなことでも大丈夫。\nタップして、できた事を3つ書こう ✏️", C_TEXT, false);
         } else {
             JSONArray items = e.optJSONArray("items");
-            for (int i = 0; i < 3; i++) {
+            int n = Math.max(3, items == null ? 0 : items.length());
+            for (int i = 0; i < n; i++) {
                 String s = items == null ? "" : items.optString(i, "").trim();
+                if (i >= 3 && s.isEmpty()) continue; // 増やした欄は、書いたものだけ
                 if (t.length() > 0) t.append("\n");
                 if (s.isEmpty()) { add(t, (i + 1) + ". ", C_DIM, false); add(t, "（あと1つ書けます）", C_DIM, false); }
                 else { add(t, (i + 1) + ". ", C_BRASS, true); add(t, s, C_TEXT, false); }
@@ -68,9 +70,9 @@ public class DiaryWidget extends AppWidgetProvider {
 
         SpannableStringBuilder a = new SpannableStringBuilder();
         add(a, "📚 すするanki ", C_SUB, false);
-        if (e != null && !e.isNull("anki") && e.has("anki")) add(a, e.optInt("anki", 0) + "語", C_BRASS, true);
+        if (e != null && !e.isNull("anki") && e.has("anki")) add(a, e.optInt("anki", 0) + "問", C_BRASS, true);
         else add(a, "—", C_DIM, false);
-        if (done >= 3) add(a, "   🎉 3つ書けました", C_BRASS, false);
+        if (done >= 3) add(a, "   🎉 " + done + "つ書けました", C_BRASS, false);
         v.setTextViewText(R.id.d_anki, a);
 
         v.setOnClickPendingIntent(R.id.d_root, WidgetData.openApp(ctx, "view=diary", 20));
