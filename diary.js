@@ -1,15 +1,17 @@
-// --- できた事日記（1日に3つ、できた事を書く ＋ すするanki でできた単語の数）---
+// --- できた事日記（1日に3つ（「＋」で好きなだけ増やせる）、できた事を書く ＋ すするanki で解いた数）---
 // 依存: date-utils.js (todayKey, addDaysToKey)
 // ・この端末の中：localStorage の koukai-nisshi-diary = { 'YYYY-MM-DD': { items: [3つ], anki: 数 or null, ankiAuto, at: 変えた時刻 } }
-//   ankiAuto：false＝自分で入れた数（すするanki の記録で上書きしない）。それ以外は、すするanki の正解数を自動で入れる
+//   items ははじめ3つ。「＋ もう1つ書く」で増やせる（DIARY_MAX まで）。増やした欄は × で消せる
+//   ankiAuto：false＝自分で入れた数（すするanki の記録で上書きしない）。それ以外は、すするanki でその日に解いた数（answered）を自動で入れる
 // ・同期がオンなら、すするanki と同じ Firestore の文書（susuru_anki_cal/{uid}）の diary に入れる（sync.js）
 
 const DIARY_KEY = 'koukai-nisshi-diary';
-const DIARY_SLOTS = 3;
+const DIARY_SLOTS = 3; // はじめの欄の数（目標）
+const DIARY_MAX = 30; // 増やせるのはここまで
 const DIARY_PLACEHOLDERS = ['例：朝ちゃんと起きられた', '例：机の上を片づけた', '例：友だちに「ありがとう」と言えた'];
 
 function emptyDiaryEntry() {
-  return { items: Array(DIARY_SLOTS).fill(''), anki: null, at: 0 };
+  return { items: Array(DIARY_SLOTS).fill(''), anki: null, note: '', at: 0 };
 }
 
 // 届いたもの・古い形のものを、いつもの形にそろえる
@@ -17,10 +19,12 @@ function normalizeDiaryEntry(e) {
   const base = emptyDiaryEntry();
   if (!e || typeof e !== 'object') return base;
   const items = Array.isArray(e.items) ? e.items : [];
-  for (let i = 0; i < DIARY_SLOTS; i++) base.items[i] = typeof items[i] === 'string' ? items[i] : '';
+  const slots = Math.min(DIARY_MAX, Math.max(DIARY_SLOTS, items.length));
+  for (let i = 0; i < slots; i++) base.items[i] = typeof items[i] === 'string' ? items[i] : '';
   const n = parseInt(e.anki, 10);
   base.anki = Number.isFinite(n) && n >= 0 ? n : null;
   if (e.ankiAuto === true || e.ankiAuto === false) base.ankiAuto = e.ankiAuto;
+  base.note = typeof e.note === 'string' ? e.note : ''; // 📖 日記（自由に書く文）
   base.at = e.at || 0;
   return base;
 }
@@ -47,7 +51,7 @@ function diaryDoneCount(e) {
 
 // 何か書いてある日か（できた事1つ以上、または すするanki の数）
 function diaryHasContent(e) {
-  return !!e && (diaryDoneCount(e) > 0 || e.anki !== null);
+  return !!e && (diaryDoneCount(e) > 0 || e.anki !== null || !!(e.note && e.note.trim()));
 }
 
 // 続けて書いた日数：今日書いていれば今日から、まだなら昨日からさかのぼって数える
@@ -59,7 +63,7 @@ function diaryStreak(map, today) {
   return n;
 }
 
-// その月（'YYYY-MM'）の合計：書いた日数・できた事の数・すするanki の単語数
+// その月（'YYYY-MM'）の合計：書いた日数・できた事の数・すするanki で解いた数
 function diaryMonthTotals(map, ym) {
   let days = 0, done = 0, anki = 0;
   Object.keys(map).forEach((k) => {

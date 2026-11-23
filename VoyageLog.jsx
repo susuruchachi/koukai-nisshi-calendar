@@ -1,5 +1,5 @@
 // --- メインコンポーネント ---
-// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, anki-feeds.js, stars.js, app-bridge.js, icons.jsx
+// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, anki-feeds.js, stars.js, planner.js, app-bridge.js, icons.jsx, planner-ui.jsx
 
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
@@ -51,6 +51,16 @@ function VoyageLog() {
   const [diarySaved, setDiarySaved] = useState(false);
   const diarySavedTimer = useRef(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+  // ✅ タスク・🧭 目標（planner.js）。{ id: 中身 }（消したものは { deleted: true, at }）
+  const [tab, setTab] = useState('cal'); // cal | tasks | plan
+  const [tasksMap, setTasksMap] = useState(() => loadMap(TASKS_KEY));
+  const [goalsMap, setGoalsMap] = useState(() => loadMap(GOALS_KEY));
+  const tasksRef = useRef(tasksMap); tasksRef.current = tasksMap;
+  const goalsRef = useRef(goalsMap); goalsRef.current = goalsMap;
+  const [taskEdit, setTaskEdit] = useState(null);
+  const [goalEdit, setGoalEdit] = useState(null);
+  const tasks = useMemo(() => liveList(tasksMap), [tasksMap]);
+  const goals = useMemo(() => liveList(goalsMap), [goalsMap]);
 
   useEffect(() => {
     let mounted = true;
@@ -81,6 +91,9 @@ function VoyageLog() {
             setDiary(next);
             saveDiaryLocal(next);
           });
+          // タスク・目標も同期：向こうで変わったものが届いたら入れかえる
+          window.VoyageSync.attachMap('tasks', () => tasksRef.current, (next) => { tasksRef.current = next; setTasksMap(next); saveMap(TASKS_KEY, next); });
+          window.VoyageSync.attachMap('goals', () => goalsRef.current, (next) => { goalsRef.current = next; setGoalsMap(next); saveMap(GOALS_KEY, next); });
         }
       }
     })();
@@ -123,13 +136,16 @@ function VoyageLog() {
   }, []);
   useEffect(() => {
     window.__koukaiOpen = (view, key) => {
-      setModalOpen(false); setReviewOpen(false); setSyncOpen(false);
+      setModalOpen(false); setReviewOpen(false); setSyncOpen(false); setTaskEdit(null); setGoalEdit(null);
+      if (view === 'tasks' || view === 'plan') { setTab(view); return; }
+      setTab('cal');
       if (view === 'diary') openDiary(key || undefined);
       else openDay(view === 'day' ? key : '');
     };
     const sv = koukaiStartView();
     if (sv.view === 'diary') openDiary();
     else if (sv.view === 'day') openDay(sv.date);
+    else if (sv.view === 'tasks' || sv.view === 'plan') setTab(sv.view);
     // 読み込み直しても同じ画面に飛ばないように、URL から view・date を消しておく
     if (sv.view) {
       try {
@@ -149,17 +165,20 @@ function VoyageLog() {
     return () => window.removeEventListener('koukai-apk', on);
   }, []);
   // 予定を書いている途中・ログインの途中は、アプリを閉じても入れ替えない
-  useEffect(() => { koukaiApkSetIdle(!modalOpen && !syncOpen); }, [modalOpen, syncOpen]);
+  useEffect(() => { koukaiApkSetIdle(!modalOpen && !syncOpen && !taskEdit && !goalEdit); }, [modalOpen, syncOpen, taskEdit, goalEdit]);
 
   // Android アプリの戻るボタン：開いている画面を閉じる（閉じたら true）
   const openLayers = useRef({});
-  openLayers.current = { modalOpen, reviewOpen, syncOpen };
+  openLayers.current = { modalOpen, reviewOpen, syncOpen, taskEdit, goalEdit, tab };
   useEffect(() => {
     window.koukaiAppBack = () => {
       const o = openLayers.current;
+      if (o.taskEdit) { setTaskEdit(null); return true; }
+      if (o.goalEdit) { setGoalEdit(null); return true; }
       if (o.modalOpen) { setModalOpen(false); return true; }
       if (o.reviewOpen) { setReviewOpen(false); return true; }
       if (o.syncOpen) { setSyncOpen(false); return true; }
+      if (o.tab !== 'cal') { setTab('cal'); return true; }
       return false;
     };
     return () => { window.koukaiAppBack = null; };
@@ -188,6 +207,43 @@ function VoyageLog() {
     if (diaryPushTimer.current) clearTimeout(diaryPushTimer.current);
     diaryPushTimer.current = setTimeout(() => { if (window.VoyageSync) window.VoyageSync.pushDiary(diaryRef.current); }, 1200);
   }, [showToast]);
+
+  // ---- タスク・目標を書きかえる（変えたものに at を付けて、この端末に保存し、同期で送る）----
+  const writeMap = useCallback((kind, id, value) => {
+    const isTask = kind === 'tasks';
+    const ref = isTask ? tasksRef : goalsRef;
+    const next = { ...ref.current, [id]: { ...value, at: Date.now() } };
+    delete next[id].id;
+    ref.current = next;
+    (isTask ? setTasksMap : setGoalsMap)(next);
+    if (!saveMap(isTask ? TASKS_KEY : GOALS_KEY, next)) showToast('保存に失敗しました', 'error');
+    if (window.VoyageSync) window.VoyageSync.pushMap(kind, next);
+  }, [showToast]);
+  const saveTask = useCallback((t) => {
+    const id = t.id || generateId();
+    const prev = tasksRef.current[id] || {};
+    writeMap('tasks', id, { ...prev, ...t, done: !!t.done, doneAt: t.done ? (prev.doneAt || Date.now()) : 0 });
+    if (t.alarm !== null && t.alarm !== undefined && t.due) koukaiAskNotifPermission();
+    return id;
+  }, [writeMap]);
+  const toggleTask = useCallback((t) => {
+    const done = !t.done;
+    writeMap('tasks', t.id, { ...tasksRef.current[t.id], done, doneAt: done ? Date.now() : 0 });
+    if (done) showToast('✅ よくできました');
+  }, [writeMap, showToast]);
+  const deleteTask = useCallback((t) => { writeMap('tasks', t.id, { deleted: true }); setTaskEdit(null); showToast('タスクを消しました'); }, [writeMap, showToast]);
+  const saveGoal = useCallback((g) => { const id = g.id || generateId(); writeMap('goals', id, { ...g }); setGoalEdit(null); showToast('保存しました'); }, [writeMap, showToast]);
+  const deleteGoal = useCallback((g) => {
+    if (!window.confirm(`「${g.title}」を消しますか？（ステップのタスクは残ります）`)) return;
+    writeMap('goals', g.id, { deleted: true });
+    // ステップのタスクは、ふつうのタスクとして残す
+    Object.entries(tasksRef.current).forEach(([id, t]) => { if (t && !t.deleted && t.goalId === g.id) writeMap('tasks', id, { ...t, goalId: '' }); });
+    setGoalEdit(null); showToast('目標を消しました');
+  }, [writeMap, showToast]);
+  const addGoalSteps = useCallback((g, steps) => {
+    steps.forEach((st, i) => writeMap('tasks', generateId() + i, { ...emptyTask(st.due), title: st.title, goalId: g.id, done: false }));
+    showToast(`ステップを${steps.length}個足しました`);
+  }, [writeMap, showToast]);
 
   const persist = useCallback(async (nextEvents) => {
     // 同期：変わった予定に「変えた時刻」を付けてから保存し、すするanki 側にも送る
@@ -250,11 +306,36 @@ function VoyageLog() {
   const todayStr = todayKey();
   // ★ 大事な予定（いちばん近い回。stars.js）
   const starList = useMemo(() => starUpcoming(events, feeds, todayStr), [events, feeds, todayStr]);
+  // その日が期限のタスク・カレンダーの印
+  const tasksByDue = useMemo(() => { const m = {}; tasks.forEach((t) => { if (t.due) (m[t.due] = m[t.due] || []).push(t); }); return m; }, [tasks]);
+  const selTasks = sortTasks(tasksByDue[selectedKey] || []);
+  const openTaskCount = tasks.filter((t) => !t.done).length;
+  const overdueCount = tasks.filter((t) => taskGroup(t, todayStr) === 'overdue').length;
+
+  // 🔔 アラーム：Android アプリはアプリに渡して、閉じていても鳴らす。ブラウザは開いている間だけ（app-bridge.js）
+  useEffect(() => { if (loaded) koukaiSetAlarms(alarmList(tasks, goals)); }, [tasks, goals, loaded]);
+  // 通知の「完了にする」で完了にしたタスク（アプリが覚えておいたもの）を受け取る
+  useEffect(() => {
+    const take = () => koukaiTakeDoneTasks().forEach((id) => {
+      const t = tasksRef.current[id];
+      if (t && !t.deleted && !t.done) writeMap('tasks', id, { ...t, done: true, doneAt: Date.now() });
+    });
+    take();
+    const onVis = () => { if (document.visibilityState === 'visible') take(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.__koukaiTasksDone = take;
+    return () => { document.removeEventListener('visibilitychange', onVis); window.__koukaiTasksDone = null; };
+  }, [writeMap]);
+  // ブラウザで鳴ったとき：画面にも出す
+  useEffect(() => {
+    window.__koukaiAlarmToast = (title) => showToast(title);
+    return () => { window.__koukaiAlarmToast = null; };
+  }, [showToast]);
   const selDiary = diary[selectedKey] || emptyDiaryEntry();
   const selDone = diaryDoneCount(selDiary);
   const isFutureDay = selectedKey > todayStr;
   const diaryStreakDays = useMemo(() => diaryStreak(diary, todayStr), [diary, todayStr]);
-  // すするanki の記録（その日の正解数＝できた単語・解いた数）。ログインしていれば sync.js が読む
+  // すするanki の記録（その日に解いた数・正解数）。ログインしていれば sync.js が読む。日記に入れるのは解いた数（answered）
   const ankiLogs = (sync && sync.ankiLogs) || {};
   const selAnkiLog = ankiLogs[selectedKey] || null;
   const loggedIn = !!(sync && sync.user);
@@ -268,9 +349,9 @@ function VoyageLog() {
       const e = diaryRef.current[day] || emptyDiaryEntry();
       if (e.ankiAuto === false) return;
       if (day !== todayStr && diaryDoneCount(e) === 0) return;
-      if (log.correct === 0 && e.anki === null) return;
-      if (e.anki === log.correct && e.ankiAuto === true) return;
-      updateDiary(day, { anki: log.correct, ankiAuto: true }, { silent: true });
+      if (log.answered === 0 && e.anki === null) return;
+      if (e.anki === log.answered && e.ankiAuto === true) return;
+      updateDiary(day, { anki: log.answered, ankiAuto: true }, { silent: true });
     });
   }, [ankiLogs, diary, todayStr, updateDiary]);
 
@@ -538,6 +619,27 @@ function VoyageLog() {
             </div>
           </div>
 
+          <div className="relative flex mt-4 rounded-lg p-0.5" style={{ background: 'var(--ink-deep)', border: '1px solid var(--chart-line)' }} role="tablist">
+            {[['cal', '📅 カレンダー', 0], ['tasks', '✅ タスク', openTaskCount], ['plan', '🧭 計画', goals.length]].map(([k, l, n]) => (
+              <button
+                key={k}
+                role="tab"
+                aria-selected={tab === k}
+                onClick={() => setTab(k)}
+                className="flex-1 py-1.5 rounded-md text-xs font-medium flex items-center justify-center gap-1"
+                style={{ background: tab === k ? 'var(--brass)' : 'transparent', color: tab === k ? 'var(--ink-deep)' : 'var(--parchment-dim)' }}
+              >
+                {l}
+                {k === 'tasks' && overdueCount > 0 ? (
+                  <span className="font-mono text-[10px] px-1 rounded" style={{ background: 'var(--danger)', color: '#fff' }}>{overdueCount}</span>
+                ) : n > 0 && k !== 'cal' ? (
+                  <span className="font-mono text-[10px] opacity-80">{n}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'cal' && (
           <div className="relative flex items-center justify-between mt-4">
             <button onClick={goPrevMonth} aria-label="前の月" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
               <ChevronLeft size={18} />
@@ -547,7 +649,24 @@ function VoyageLog() {
               <ChevronRight size={18} />
             </button>
           </div>
+          )}
         </div>
+
+        {tab === 'tasks' && (
+          <TaskPanel
+            tasks={tasks}
+            goals={goals}
+            today={todayStr}
+            onToggle={toggleTask}
+            onEdit={(t) => setTaskEdit(t)}
+            onQuickAdd={(title) => { saveTask({ ...emptyTask(todayStr), title }); showToast('タスクを足しました'); }}
+          />
+        )}
+        {tab === 'plan' && (
+          <PlanPanel goals={goals} tasks={tasks} today={todayStr} onEditGoal={(g) => setGoalEdit(g)} onToggle={toggleTask} onEditTask={(t) => setTaskEdit(t)} onAddSteps={addGoalSteps} />
+        )}
+
+        {tab === 'cal' && (<>
 
         <div className="grid grid-cols-7 px-3 pt-3 font-mono text-[11px]">
           {WEEKDAYS_JA.map((wd, i) => (
@@ -620,6 +739,9 @@ function VoyageLog() {
                   {dayEvents.filter((e) => !(e.spanEnd && e.instanceDate && e.spanEnd > e.instanceDate)).slice(0, 3).map((ev) => (
                     <span key={ev.id} className="w-1 h-1 rounded-full" style={{ backgroundColor: 'var(--signal)' }} />
                   ))}
+                  {(tasksByDue[cell.key] || []).some((t) => !t.done) && (
+                    <span className="w-1 h-1" style={{ backgroundColor: cell.key < todayStr ? 'var(--danger)' : 'var(--brass-bright)' }} aria-label="期限のタスクあり" />
+                  )}
                 </span>
               </button>
             );
@@ -757,6 +879,18 @@ function VoyageLog() {
             </ul>
           )}
 
+          {(
+            <div className="mt-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-mono" style={{ color: 'var(--parchment-dim)' }}>✅ この日が期限のタスク{selTasks.length ? `（${selTasks.filter((t) => !t.done).length}/${selTasks.length}）` : ''}</h3>
+                <button onClick={() => setTaskEdit(emptyTask(selectedKey))} className="text-[11px] font-mono px-2 py-1 rounded-md flex items-center gap-1" style={{ color: 'var(--brass-bright)', border: '1px solid var(--chart-line)', background: 'transparent' }}>
+                  <Plus size={11} /> タスク
+                </button>
+              </div>
+              {selTasks.length > 0 && <ul>{selTasks.map((t) => <TaskRow key={t.id} t={t} today={todayStr} goals={goals} onToggle={toggleTask} onEdit={(x) => setTaskEdit(x)} compact />)}</ul>}
+            </div>
+          )}
+
           <section
             ref={diarySection}
             className="mt-4 rounded-xl p-3.5"
@@ -784,7 +918,7 @@ function VoyageLog() {
               </div>
             </div>
             <p className="text-[11px] mt-1 mb-3" style={{ color: 'var(--parchment-dim)' }}>
-              {isFutureDay ? 'まだ先の日です。その日になったら書けます。' : 'どんなに小さなことでも大丈夫。できた事を3つ書こう。'}
+              {isFutureDay ? 'まだ先の日です。その日になったら書けます。' : 'どんなに小さなことでも大丈夫。できた事を3つ書こう（もっとあれば「＋」で増やせます）。'}
             </p>
 
             <ol className="space-y-2">
@@ -818,18 +952,46 @@ function VoyageLog() {
                       const inputs = row ? row.querySelectorAll('input') : [];
                       if (inputs[i + 1]) inputs[i + 1].focus(); else e.currentTarget.blur();
                     }}
-                    placeholder={DIARY_PLACEHOLDERS[i]}
+                    placeholder={DIARY_PLACEHOLDERS[i] || '例：ほかにできた事'}
                     className="diary-input flex-1 min-w-0 px-3 py-2 rounded-lg text-sm"
                     aria-label={`できた事 ${i + 1}つ目`}
                   />
+                  {i >= DIARY_SLOTS && !isFutureDay && (
+                    <button
+                      type="button"
+                      onClick={() => updateDiary(selectedKey, { items: selDiary.items.filter((_, k) => k !== i) })}
+                      className="shrink-0 p-1.5 rounded-md"
+                      style={{ color: 'var(--parchment-dim)', background: 'transparent' }}
+                      aria-label={`${i + 1}つ目の欄を消す`}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
                 </li>
               ))}
             </ol>
+            {!isFutureDay && selDiary.items.length < DIARY_MAX && (
+              <button
+                type="button"
+                onClick={() => {
+                  updateDiary(selectedKey, { items: [...selDiary.items, ''] });
+                  // 足した欄にすぐ書けるように
+                  setTimeout(() => {
+                    const ins = diarySection.current ? diarySection.current.querySelectorAll('ol input') : [];
+                    if (ins.length) ins[ins.length - 1].focus();
+                  }, 50);
+                }}
+                className="mt-2 w-full flex items-center justify-center gap-1 text-xs py-1.5 rounded-lg"
+                style={{ color: 'var(--brass-bright)', border: '1px dashed var(--chart-line)', background: 'transparent' }}
+              >
+                <Plus size={13} /> もう1つ書く
+              </button>
+            )}
 
             <div className="flex items-center gap-2 mt-3 pt-3" style={{ borderTop: '1px dashed var(--chart-line)' }}>
               <span className="text-sm shrink-0" aria-hidden="true">📚</span>
               <label htmlFor="diary-anki" className="text-xs shrink-0" style={{ color: 'var(--parchment)' }}>
-                すするankiで<br className="sm:hidden" />できた単語
+                すするankiで<br className="sm:hidden" />解いた数
               </label>
               <input
                 id="diary-anki"
@@ -846,28 +1008,28 @@ function VoyageLog() {
                 placeholder="0"
                 className="diary-input w-20 ml-auto px-2 py-2 rounded-lg text-sm font-mono text-right"
               />
-              <span className="text-xs shrink-0" style={{ color: 'var(--parchment-dim)' }}>語</span>
+              <span className="text-xs shrink-0" style={{ color: 'var(--parchment-dim)' }}>問</span>
             </div>
             {!isFutureDay && (
               <div className="text-[11px] mt-1.5 pl-6 flex items-center justify-end gap-2 flex-wrap" style={{ color: 'var(--parchment-dim)' }}>
                 {!loggedIn ? (
                   <button onClick={() => setSyncOpen(true)} className="underline" style={{ background: 'transparent', color: 'var(--parchment-dim)' }}>
-                    ☁️ ログインすると、すするankiの正解数が自動で入ります
+                    ☁️ ログインすると、すするankiで解いた数が自動で入ります
                   </button>
                 ) : !selAnkiLog ? (
                   <span>すするankiの記録を読んでいます…</span>
                 ) : (
                   <>
-                    <span>すするanki：正解 {selAnkiLog.correct}問 ／ 解いた {selAnkiLog.answered}問</span>
-                    {selDiary.anki === selAnkiLog.correct ? (
+                    <span>すするanki：解いた {selAnkiLog.answered}問（正解 {selAnkiLog.correct}問）</span>
+                    {selDiary.anki === selAnkiLog.answered ? (
                       selDiary.ankiAuto !== false && <span style={{ color: 'var(--signal)' }}>（自動で入れています）</span>
                     ) : (
                       <button
-                        onClick={() => updateDiary(selectedKey, { anki: selAnkiLog.correct, ankiAuto: true })}
+                        onClick={() => updateDiary(selectedKey, { anki: selAnkiLog.answered, ankiAuto: true })}
                         className="px-2 py-0.5 rounded-md"
                         style={{ color: 'var(--ink-deep)', background: 'var(--brass)' }}
                       >
-                        正解数を入れる
+                        解いた数を入れる
                       </button>
                     )}
                   </>
@@ -878,7 +1040,7 @@ function VoyageLog() {
             <div className="flex items-center justify-between mt-2.5 text-[11px] font-mono" style={{ color: 'var(--parchment-dim)' }}>
               <span>
                 {selDone >= DIARY_SLOTS ? (
-                  <span style={{ color: 'var(--brass-bright)' }}>🎉 3つ書けました！よくがんばりました</span>
+                  <span style={{ color: 'var(--brass-bright)' }}>🎉 {selDone}つ書けました！よくがんばりました</span>
                 ) : (
                   `${selDone} / ${DIARY_SLOTS} 書きました`
                 )}
@@ -888,9 +1050,29 @@ function VoyageLog() {
               </span>
             </div>
           </section>
+
+          <section className="mt-4 rounded-xl p-3.5" style={{ background: 'var(--ink-panel)', border: '1px solid var(--chart-line)' }} aria-label="日記">
+            <h3 className="font-display text-base flex items-center gap-1.5 mb-2">📖 {selectedKey === todayStr ? '今日の日記' : 'この日の日記'}</h3>
+            <textarea
+              value={selDiary.note || ''}
+              disabled={isFutureDay}
+              onChange={(e) => updateDiary(selectedKey, { note: e.target.value })}
+              rows={Math.min(14, Math.max(4, (selDiary.note || '').split('\n').length + 1))}
+              maxLength={20000}
+              placeholder={isFutureDay ? 'まだ先の日です' : 'その日のこと・思ったことを、自由に書けます（書くとすぐ保存・ほかの端末にも届きます）'}
+              className="diary-input w-full px-3 py-2 rounded-lg text-sm leading-relaxed resize-y"
+              aria-label="日記"
+            />
+            <div className="flex justify-between text-[11px] font-mono mt-1" style={{ color: 'var(--parchment-dim)' }}>
+              <span>{(selDiary.note || '').length ? `${(selDiary.note || '').length}文字` : ''}</span>
+              <span style={{ opacity: diarySaved ? 1 : 0, transition: 'opacity 0.3s' }}>{diarySaved ? '✓ 保存しました' : ''}</span>
+            </div>
+          </section>
         </div>
+        </>)}
 
         <div className="px-4 pb-5">
+          {tab === 'cal' && (<>
           <button
             onClick={handleExportAll}
             className="w-full flex items-center justify-center gap-2 font-mono text-xs py-2.5 rounded-lg"
@@ -901,6 +1083,7 @@ function VoyageLog() {
           <p className="text-[11px] text-center mt-2 leading-relaxed" style={{ color: 'var(--parchment-dim)' }}>
             PCのGoogleカレンダーで「設定」→「インポート / エクスポート」から取り込めます(スマホアプリからは不可)
           </p>
+          </>)}
           {koukaiAppOutdated() && koukaiApkAuto() ? (
             apk.silent ? (
               <p className="mt-3 text-[11px] text-center" style={{ color: 'var(--parchment-dim)' }}>📲 新しいアプリを用意しています。アプリを閉じると自動で更新されます</p>
@@ -934,6 +1117,18 @@ function VoyageLog() {
       </div>
 
       </div>
+
+      {taskEdit && (
+        <TaskEditor
+          task={{ ...emptyTask(''), ...taskEdit }}
+          goals={goals}
+          today={todayStr}
+          onSave={(t) => { saveTask(t); setTaskEdit(null); showToast('保存しました'); }}
+          onDelete={deleteTask}
+          onClose={() => setTaskEdit(null)}
+        />
+      )}
+      {goalEdit && <GoalEditor goal={{ ...emptyGoal(), ...goalEdit }} onSave={saveGoal} onDelete={deleteGoal} onClose={() => setGoalEdit(null)} />}
 
       {modalOpen && (
         <div
@@ -1232,7 +1427,7 @@ function VoyageLog() {
                 </button>
               </div>
               <div className="grid grid-cols-3 gap-2 mb-4 text-center">
-                {[['書いた日', `${tot.days}日`], ['できた事', `${tot.done}個`], ['anki の単語', `${tot.anki}語`]].map(([label, val]) => (
+                {[['書いた日', `${tot.days}日`], ['できた事', `${tot.done}個`], ['anki で解いた数', `${tot.anki}問`]].map(([label, val]) => (
                   <div key={label} className="rounded-lg py-2" style={{ background: 'rgba(60,90,110,0.1)', border: '1px solid var(--chart-line)' }}>
                     <div className="font-mono text-base font-semibold">{val}</div>
                     <div className="text-[10px]" style={{ color: '#5B6D7A' }}>{label}</div>
@@ -1254,11 +1449,12 @@ function VoyageLog() {
                         >
                           <div className="flex items-center justify-between mb-1">
                             <span className="font-display text-sm">{formatSelectedHeading(k)}</span>
-                            {e.anki !== null && <span className="font-mono text-[11px]" style={{ color: '#5B6D7A' }}>📚 {e.anki}語</span>}
+                            {e.anki !== null && <span className="font-mono text-[11px]" style={{ color: '#5B6D7A' }}>📚 {e.anki}問</span>}
                           </div>
                           <ul className="text-xs space-y-0.5">
                             {e.items.filter((t) => t.trim()).map((t, i) => <li key={i}>・{t}</li>)}
                           </ul>
+                          {e.note && e.note.trim() && <p className="text-xs mt-1.5 whitespace-pre-wrap line-clamp-4" style={{ color: '#3C4E5C' }}>📖 {e.note}</p>}
                         </button>
                       </li>
                     );

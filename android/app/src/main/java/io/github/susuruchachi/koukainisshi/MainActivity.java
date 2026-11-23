@@ -163,6 +163,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // 通知の「✅ 完了にする」で完了にしたタスクを、ウェブ版に取りに来てもらう
+        if (web != null && pageLoaded) web.evaluateJavascript("window.__koukaiTasksDone&&window.__koukaiTasksDone()", null);
         // 裏で入れようとしたら確認が要った：開いたときに確認を出す
         if (InstallResultReceiver.askLater) { InstallResultReceiver.askLater = false; bg.execute(() -> ApkUpdater.install(getApplicationContext())); }
     }
@@ -264,6 +266,17 @@ public class MainActivity extends Activity {
             String v = p.getString("pending", "");
             if (!v.isEmpty()) p.edit().remove("pending").apply();
             return v;
+        }
+
+        // ---- 🔔 タスクのアラーム（app-bridge.js の koukaiSetAlarms から） ----
+        @JavascriptInterface public void setAlarms(String json) { AlarmScheduler.setAll(MainActivity.this, json); }
+        // 通知の「✅ 完了にする」で完了にしたタスクの id（JSON の配列）。1回だけ渡す
+        @JavascriptInterface public String takeDoneTasks() { return AlarmScheduler.takeDone(MainActivity.this); }
+        // 通知の許可（Android 13 から）を聞く
+        @JavascriptInterface public void requestNotifPermission() {
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread(() -> requestPermissions(new String[] { android.Manifest.permission.POST_NOTIFICATIONS }, 1201));
+            }
         }
 
         // ---- アプリの自動更新（app-bridge.js から） ----

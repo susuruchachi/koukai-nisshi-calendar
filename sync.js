@@ -7,6 +7,7 @@
 // ・ログインすると同期する（はじめからオン。「同期する」を外した端末は、この端末の中だけ）。同じアカウントのほかの端末（スマホ・パソコン・アプリ）にも届く
 // ・オフラインで変えた分は Firestore がこの端末に覚えておき（enablePersistence）、つながったら送る。ページを閉じても、次に開いたときに at で比べて送り直す
 // ・この端末のデータがどのアカウントのものかを覚えておき（koukai-nisshi-owner）、別のアカウントでログインしたら、前の人の予定・日記を混ぜない
+// ・タスク・目標（planner.js）も、同じ文書の tasks / goals = { id: 中身（消したものは { deleted: true, at }）} に、1つずつ新しい方を使って入れる（attachMap）
 // ・できた事日記（diary.js）も、同じ文書の diary = { 'YYYY-MM-DD': { items, anki, at } } に入れる（日ごとに新しい方を使う）
 //   すするanki は events しか読まないので、diary を足してもすするanki には影響しない
 // ・すするanki の毎日の記録 susuru_anki_logs/{日付}_{uid} = { answered: 解いた数, correct: 正解した数 }（すするanki が1問ごとに書く・本人は読める）を
@@ -46,7 +47,9 @@
       available: !!db, on: isOn(), ready, error: lastError,
       user: user ? { name: user.displayName || user.email || '', email: user.email || '' } : null,
       count: Object.values(remote).filter((x) => x && !x.deleted).length,
-      diaryDays: Object.values(remoteDiary).filter((x) => x && ((x.items || []).some((t) => t && String(t).trim()) || (x.anki !== null && x.anki !== undefined))).length,
+      diaryDays: Object.values(remoteDiary).filter((x) => x && ((x.items || []).some((t) => t && String(t).trim()) || (x.note && String(x.note).trim()) || (x.anki !== null && x.anki !== undefined))).length,
+      taskCount: Object.values((maps.tasks || {}).remote || {}).filter((x) => x && !x.deleted).length,
+      goalCount: Object.values((maps.goals || {}).remote || {}).filter((x) => x && !x.deleted).length,
       lastSyncAt, pending, online,
       ankiLogs,
       feedsOn: feedsOn(),
@@ -134,7 +137,7 @@
       if (!e || !e.at) return;
       const r = remoteDiary[day];
       if (r && (r.at || 0) >= e.at) return;
-      up[day] = clean({ items: e.items || [], anki: e.anki === undefined ? null : e.anki, ankiAuto: e.ankiAuto, at: e.at });
+      up[day] = clean({ items: e.items || [], anki: e.anki === undefined ? null : e.anki, ankiAuto: e.ankiAuto, note: e.note || '', at: e.at });
     });
     if (!Object.keys(up).length) return;
     db.collection('susuru_anki_cal').doc(user.uid).set({ diary: up, updatedAt: Date.now() }, { merge: true })
@@ -223,9 +226,41 @@
     }, (e) => { feedError = e.code || e.message; emit(); }));
   }
 
+  // ---- タスク・目標：{ id: 中身 } を1つずつ（at の大きい方）まぜる ----
+  const MAP_NAMES = ['tasks', 'goals'];
+  const maps = {}; // name → { get, apply, remote }
+  MAP_NAMES.forEach((n) => { maps[n] = { get: null, apply: () => {}, remote: {} }; });
+  function mergeMap(name) {
+    const m = maps[name]; if (!m.get) return;
+    const local = m.get(); const next = { ...local }; let changed = false;
+    Object.entries(m.remote).forEach(([id, r]) => {
+      if (!r || typeof r !== 'object') return;
+      if ((r.at || 0) <= ((next[id] && next[id].at) || 0)) return;
+      next[id] = r; changed = true;
+    });
+    if (changed) m.apply(next);
+    pushMap(name, next);
+  }
+  function pushMap(name, map) {
+    const m = maps[name];
+    if (!ready || !user || !isOn() || !db || !m.get) return;
+    const up = {};
+    Object.entries(map || m.get()).forEach(([id, v]) => {
+      if (!v || !v.at) return;
+      const r = m.remote[id];
+      if (r && (r.at || 0) >= v.at) return;
+      const o = { ...v }; delete o.id;
+      up[id] = clean(o);
+    });
+    if (!Object.keys(up).length) return;
+    db.collection('susuru_anki_cal').doc(user.uid).set({ [name]: up, updatedAt: Date.now() }, { merge: true })
+      .catch((e) => { lastError = e.code || e.message; emit(); });
+  }
+
   function start() {
     if (unsub) { try { unsub(); } catch (e) {} unsub = null; }
     ready = false; remote = {}; remoteDiary = {}; lastError = '';
+    MAP_NAMES.forEach((n) => { maps[n].remote = {}; });
     if (!user || !isOn() || !db) { emit(); return; }
     const uid = user.uid;
     let first = true;
@@ -234,6 +269,7 @@
       if (!user || user.uid !== uid) return;
       remote = (snap.exists && snap.data().events) || {};
       remoteDiary = (snap.exists && snap.data().diary) || {};
+      MAP_NAMES.forEach((n) => { maps[n].remote = (snap.exists && snap.data()[n]) || {}; });
       const meta = snap.metadata || {};
       pending = !!meta.hasPendingWrites;
       if (!meta.fromCache && !pending) lastSyncAt = Date.now();
@@ -247,10 +283,11 @@
           saveDels({});
           applyLocal([]);
           if (getDiary) applyDiary({});
+          MAP_NAMES.forEach((n) => { if (maps[n].get) maps[n].apply({}); });
         }
         try { localStorage.setItem(OWNER_KEY, uid); } catch (e) {}
       }
-      merge(); mergeDiary(); emit();
+      merge(); mergeDiary(); MAP_NAMES.forEach(mergeMap); emit();
     }, (e) => { ready = false; lastError = e.code || e.message; emit(); });
     emit();
   }
@@ -322,6 +359,9 @@
     push,
     // できた事日記（diary.js）：今の日記を読む関数と、日記を入れかえる関数
     attachDiary(getFn, applyFn) { getDiary = getFn; applyDiary = applyFn; if (ready) mergeDiary(); },
+    // タスク・目標（planner.js）：name は 'tasks' か 'goals'
+    attachMap(name, getFn, applyFn) { const m = maps[name]; if (!m) return; m.get = getFn; m.apply = applyFn; if (ready) mergeMap(name); },
+    pushMap(name, map) { if (maps[name]) pushMap(name, map); },
     pushDiary,
     // すするanki のその日の記録（{ answered, correct }）を読む。届いたら subscribe の state.ankiLogs に入る
     askAnkiDay,

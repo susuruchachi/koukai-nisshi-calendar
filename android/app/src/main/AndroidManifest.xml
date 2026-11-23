@@ -6,6 +6,12 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 新しい APK を、アプリの中から上書きインストールする（自動更新。初めてのときだけ「この提供元のアプリを許可」を聞かれる） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 🔔 タスクのアラーム：通知（Android 13 から許可が要る）・時刻どおりに鳴らす・再起動のあとに入れ直す -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:allowBackup="true"
@@ -57,6 +63,14 @@
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_star_info" />
+        </receiver>
+        <!-- 🔔 タスクのアラーム（鳴らす・完了にする・10分後）と、再起動のあとに入れ直す -->
+        <receiver android:name=".AlarmReceiver" android:exported="false" />
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
         </receiver>
         <!-- アプリの自動更新（入れた結果・閉じて1分後に起こす） -->
         <receiver android:name=".InstallResultReceiver" android:exported="false" />

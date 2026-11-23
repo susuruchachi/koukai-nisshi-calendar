@@ -19,7 +19,7 @@
 
     <TextView android:id="@+id/d_items" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
         android:layout_marginTop="4dp" android:text="タップして、今日できた事を3つ書こう" android:textSize="13sp"
-        android:textColor="#EDE6D2" android:lineSpacingExtra="2dp" android:maxLines="6" android:ellipsize="end" />
+        android:textColor="#EDE6D2" android:lineSpacingExtra="2dp" android:maxLines="12" android:ellipsize="end" />
 
     <TextView android:id="@+id/d_anki" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginTop="4dp" android:text="" android:textSize="12sp" android:textColor="#97A8B5"
