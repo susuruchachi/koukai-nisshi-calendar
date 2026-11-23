@@ -7,6 +7,7 @@
 <title>航海日誌 ログイン</title>
 <!--
   Android アプリ（android/）の Google ログイン用のページ。
+  iOS のアプリ（すするアプリ・すするanki の ios/）も使う：#state=…&ios=1 で開くと、ログインできたら susuruanki://auth?state=…&id=…&at=… に移る。
   アプリの中（WebView）では Google がログインを許さないので、アプリはこのページをブラウザ（Chrome など）で開く。
   ここで Google にログインし、受け取ったトークンを「アプリに戻る」で koukainisshi://auth に渡す。
   アプリは state（アプリが作った合言葉）が同じか確かめてから、トークンで Firebase にログインする。
@@ -45,7 +46,10 @@
 <script>
 (function () {
   const PKG = 'io.github.susuruchachi.koukainisshi';
-  const state = new URLSearchParams(location.hash.slice(1)).get('state') || '';
+  const H = new URLSearchParams(location.hash.slice(1));
+  const state = H.get('state') || '';
+  // iOS のアプリ（すするアプリ）：iOS のログインの画面で開いて、ログインできたら susuruanki://auth に移る（アプリが受け取って閉じる）
+  const IOS = H.get('ios') === '1';
   const errEl = document.getElementById('err');
   const go = document.getElementById('go');
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(state)) {
@@ -70,12 +74,13 @@
       const c = r.credential || {};
       if (!c.idToken) throw new Error('Google のトークンを受け取れませんでした');
       const q = 'state=' + encodeURIComponent(state) + '&id=' + encodeURIComponent(c.idToken) + (c.accessToken ? '&at=' + encodeURIComponent(c.accessToken) : '');
-      const href = 'intent://auth?' + q + '#Intent;scheme=koukainisshi;package=' + PKG + ';end';
+      const href = IOS ? 'susuruanki://auth?' + q : 'intent://auth?' + q + '#Intent;scheme=koukainisshi;package=' + PKG + ';end';
       document.getElementById('back').href = href;
       document.getElementById('who').textContent = (r.user && (r.user.email || r.user.displayName) || '') + ' でログインできました。';
       document.getElementById('step1').classList.add('hidden');
       document.getElementById('step2').classList.remove('hidden');
       auth.signOut().catch(function () {});
+      if (IOS) location.href = href;
     }).catch(function (e) {
       go.disabled = false;
       errEl.textContent = 'ログインできませんでした（' + (e.code || e.message) + '）';
