@@ -11,7 +11,7 @@ const DIARY_MAX = 30; // 増やせるのはここまで
 const DIARY_PLACEHOLDERS = ['例：朝ちゃんと起きられた', '例：机の上を片づけた', '例：友だちに「ありがとう」と言えた'];
 
 function emptyDiaryEntry() {
-  return { items: Array(DIARY_SLOTS).fill(''), anki: null, at: 0 };
+  return { items: Array(DIARY_SLOTS).fill(''), anki: null, note: '', at: 0 };
 }
 
 // 届いたもの・古い形のものを、いつもの形にそろえる
@@ -24,6 +24,7 @@ function normalizeDiaryEntry(e) {
   const n = parseInt(e.anki, 10);
   base.anki = Number.isFinite(n) && n >= 0 ? n : null;
   if (e.ankiAuto === true || e.ankiAuto === false) base.ankiAuto = e.ankiAuto;
+  base.note = typeof e.note === 'string' ? e.note : ''; // 📖 日記（自由に書く文）
   base.at = e.at || 0;
   return base;
 }
@@ -50,7 +51,7 @@ function diaryDoneCount(e) {
 
 // 何か書いてある日か（できた事1つ以上、または すするanki の数）
 function diaryHasContent(e) {
-  return !!e && (diaryDoneCount(e) > 0 || e.anki !== null);
+  return !!e && (diaryDoneCount(e) > 0 || e.anki !== null || !!(e.note && e.note.trim()));
 }
 
 // 続けて書いた日数：今日書いていれば今日から、まだなら昨日からさかのぼって数える

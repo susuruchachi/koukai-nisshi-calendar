@@ -5,7 +5,7 @@
 // ・ウィジェットから開いたとき（「できた事を書く」など）は window.__koukaiOpen(view) が呼ばれる
 
 // 公開している APK の versionCode（android/app/build.gradle と同じ数。GitHub Actions の android-apk が作り直したときに上げる）
-const ANDROID_APK_CODE = 6;
+const ANDROID_APK_CODE = 7;
 // ブラウザ・古いアプリでダウンロードするとき（GitHub）と、アプリが自動で更新するとき（このサイト：アプリはこのサイトの APK しか取らない）
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/koukai-nisshi-calendar/raw/main/apk/koukai-nisshi.apk';
 const ANDROID_APK_SELF_URL = new URL('apk/koukai-nisshi.apk', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();
@@ -137,3 +137,50 @@ if (koukaiApkAuto()) {
   setTimeout(() => koukaiCheckApkUpdate(false), 3000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') koukaiCheckApkUpdate(false); });
 }
+
+// ---- 🔔 タスクのアラーム（planner.js の alarmList）----
+// ・Android アプリ（1.6.0 から）：KoukaiApp.setAlarms に渡すと、アプリが AlarmManager で時刻どおりに鳴らす（閉じていても・再起動しても）。
+//   通知の「✅ 完了にする」で完了にしたタスクは、アプリが覚えておき、開いたときに koukaiTakeDoneTasks で受け取る
+// ・ブラウザ：開いている間だけ、30秒ごとに時刻を見て、通知（許可があれば）と画面の知らせ・音で知らせる
+function koukaiNativeAlarms() { return !!(window.KoukaiApp && window.KoukaiApp.setAlarms); }
+let _koukaiAlarms = [];
+function koukaiSetAlarms(list) {
+  _koukaiAlarms = list || [];
+  if (koukaiNativeAlarms()) { try { window.KoukaiApp.setAlarms(JSON.stringify(_koukaiAlarms)); } catch (e) {} }
+}
+function koukaiTakeDoneTasks() {
+  try { return JSON.parse((window.KoukaiApp && window.KoukaiApp.takeDoneTasks && window.KoukaiApp.takeDoneTasks()) || '[]') || []; } catch (e) { return []; }
+}
+// アラームを付けたときに、通知の許可を聞く（Android 13 以上のアプリ・ブラウザ）
+function koukaiAskNotifPermission() {
+  try {
+    if (window.KoukaiApp && window.KoukaiApp.requestNotifPermission) { window.KoukaiApp.requestNotifPermission(); return; }
+    if (!koukaiIsApp() && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+  } catch (e) {}
+}
+function koukaiBeep() {
+  try {
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    const ctx = new C();
+    [0, 0.35, 0.7].forEach((t) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 880; g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.28);
+      o.connect(g); g.connect(ctx.destination); o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.3);
+    });
+  } catch (e) {}
+}
+function koukaiWebAlarmTick() {
+  if (koukaiNativeAlarms()) return; // アプリが鳴らす
+  const now = Date.now(), fired = loadFired();
+  _koukaiAlarms.forEach((a) => {
+    const key = a.id + '@' + a.at;
+    if (a.at > now || now - a.at > 10 * 60000 || fired[key]) return; // 10分より前に過ぎたものは鳴らさない
+    markFired(key);
+    try { if ('Notification' in window && Notification.permission === 'granted') new Notification(a.title, { body: a.body, tag: key, icon: './icons/icon-192.png' }); } catch (e) {}
+    koukaiBeep();
+    if (typeof window.__koukaiAlarmToast === 'function') window.__koukaiAlarmToast(`${a.title}（${a.body}）`);
+  });
+}
+setInterval(koukaiWebAlarmTick, 30000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(koukaiWebAlarmTick, 500); });
