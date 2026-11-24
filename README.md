@@ -132,13 +132,15 @@ Android のアイコンを変えたら APK も作り直してください。ア�
   見るだけの予定は「＋」で自分の予定にコピーできる（Google・すするanki・貸し借り帳のどれでも）
 - **許可（スコープ）**：`calendar.app.created`（このアプリが作ったカレンダーだけ書ける）・`calendar.calendarlist.readonly`（カレンダーの一覧）・`calendar.events.readonly`（予定を読む）
 - **トークン**：Android アプリ（1.8.0 から）はアプリが Google に頼む（`KoukaiApp.gcalAuthorize`・AuthorizationClient）。一度許可すれば、あとは画面なしで自動。
-  ブラウザは Google Identity Services（1時間で切れるので、切れたら上に出る「つなぎ直す」を押す）。トークンはこの端末の中だけ（sessionStorage）で、サーバーには置かない
+  ブラウザは Google Identity Services（1時間で切れるので、切れたら上に出る「つなぎ直す」を押す）。トークンはこの端末の中だけ（sessionStorage）で、サーバーには置かない。
+  **スマホのブラウザ**はポップアップ（別のタブ）から結果が戻らず白い画面で止まることがあるので、ページごと Google に移って、許可をもらったら `#access_token=…` を付けて戻ってくる（合言葉 state を確かめて、URL から消す）
 - 同期するのは、アプリ・ページを開いている間（開いたとき・予定を変えて4秒後・10分ごと・「今すぐ同期」）。選んだカレンダーはこの端末に覚える
 - **はじめに一度だけ**（Google Cloud のコンソールで、Firebase のプロジェクト susuruanki を選んで）：
   1. 「API とサービス」→「ライブラリ」で **Google Calendar API** を有効にする
   2. 「Google Auth Platform」（OAuth 同意画面）の「データアクセス」に上の3つのスコープを足す。公開ステータスが「テスト中」なら「対象」のテストユーザーに自分の Google アカウントを足す
   3. ブラウザで使うなら：「認証情報」→ OAuth 2.0 クライアント ID の「Web client (auto created by Google Service)」の「承認済みの JavaScript 生成元」に
-     `https://susuruchachi.github.io` と `https://koukai-nisshi-calendar.vercel.app` を足す（Android アプリは要らない）
+     `https://susuruchachi.github.io` と `https://koukai-nisshi-calendar.vercel.app` を足す（Android アプリは要らない）。
+     スマホのブラウザでも使うなら、同じ画面の「承認済みのリダイレクト URI」に `https://susuruchachi.github.io/koukai-nisshi-calendar/` と `https://koukai-nisshi-calendar.vercel.app/` も足す
   - Google の審査を受けていないので、はじめて許可するときに「Google はこのアプリを確認していません」と出る →「詳細」→「（安全ではないページ）に移動」
 
 ## 📖 日記・✅ タスク・🔔 アラーム・🧭 長期の計画（planner.js・planner-ui.jsx）

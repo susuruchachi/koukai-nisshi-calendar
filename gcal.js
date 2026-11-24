@@ -6,6 +6,8 @@
 //   calendar.events.readonly（予定を読む）
 // ・アクセストークン（1時間）：Android アプリはアプリが Google に頼む（KoukaiApp.gcalAuthorize。一度許可すれば、あとは画面なしで何度でも）。
 //   ブラウザは Google Identity Services（はじめは許可の画面。1時間たったら「つなぎ直す」を押す）。トークンはこの端末の中だけ（sessionStorage）
+//   スマホのブラウザは、ポップアップ（別のタブ）から結果が戻らず白い画面で止まることがあるので、ページごと Google に移って戻ってくる（redirect）。
+//   戻り先（このページの URL）は、Google Cloud の Web client の「承認済みのリダイレクト URI」に入れておく
 // ・同期するのは、アプリ・ページを開いている間（開いたとき・予定を変えたとき・10分ごと・「今すぐ同期」）
 // 依存（呼ばれるときに）: ics-export.js の buildRRule、date-utils.js の addDaysToKey・dateKey・pad、anki-feeds.js の ankiGuessType
 (function () {
@@ -93,12 +95,39 @@
     });
   }
 
+  // ---- スマホのブラウザ：ページごと Google に移って、許可をもらって戻ってくる ----
+  const isMobileBrowser = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') && !isApp();
+  function returnUrl() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
+  function redirectForToken() {
+    const state = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+    try { sessionStorage.setItem('koukai-nisshi-gcal-state', state); } catch (e) {}
+    const q = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: returnUrl(), response_type: 'token', scope: SCOPES.join(' '), include_granted_scopes: 'true', state });
+    // ログインしている航海日誌のアカウントを先に選んでおく（同じ Google アカウントなら、アカウントを選ぶ画面をとばせる）
+    try { const u = window.VoyageSync && window.VoyageSync.state().user; if (u && u.email) q.set('login_hint', u.email); } catch (e) {}
+    location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + q.toString());
+    return new Promise(() => {}); // ページが移るので、ここでは終わらない
+  }
+  // 戻ってきたとき：URL の #access_token=… を受け取る（合言葉 state が同じときだけ）。受け取ったら URL から消す
+  (function takeRedirect() {
+    if (!/access_token=|error=/.test(location.hash || '')) return;
+    const h = new URLSearchParams(location.hash.slice(1));
+    let want = '';
+    try { want = sessionStorage.getItem('koukai-nisshi-gcal-state') || ''; sessionStorage.removeItem('koukai-nisshi-gcal-state'); } catch (e) {}
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    if (!want || h.get('state') !== want) return;
+    if (h.get('access_token')) {
+      const granted = (h.get('scope') || '').split(' ');
+      if (SCOPES.every((sc) => granted.includes(sc))) { keepToken(h.get('access_token'), Number(h.get('expires_in')) || 3600); st.on = true; ls.set(K.on, true); }
+      else st.error = 'Googleカレンダーの許可が足りません（すべてにチェックを入れてください）';
+    } else st.error = h.get('error') === 'access_denied' ? 'Googleカレンダーの許可がもらえませんでした' : 'Google に断られました（' + h.get('error') + '）';
+  })();
+
   // interactive：ボタンを押したとき（許可の画面を出してよい）。そうでなければ、画面を出さずに取れるときだけ
   async function getToken(interactive) {
     if (token && token.exp > Date.now()) return token.value;
     if (isApp()) return nativeToken(interactive);
     if (!interactive) throw Object.assign(new Error('つなぎ直してください'), { needsUi: true });
-    return webToken();
+    return isMobileBrowser() ? redirectForToken() : webToken();
   }
 
   // ---------- Google Calendar API ----------
