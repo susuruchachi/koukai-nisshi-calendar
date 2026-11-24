@@ -26,6 +26,7 @@ manifest.json        … PWAの設定(アプリ名・アイコン・表示モー
 sw.js                 … Service Worker(オフラインキャッシュ、インストール要件を満たすため)
 app-login.html        … Android アプリの Google ログイン用（ブラウザで開いてログインし、アプリに戻る）
 android/              … Android アプリ（WebView 版＋ホーム画面のウィジェット）
+                        （1.7.0 から：開いたときに、すするアプリ＝3つのアプリのランチャー（susuru-obenri-tools の launcher-android/）が入っていなければ、入れるか聞く。LauncherInstaller.java）
 apk/koukai-nisshi.apk … 作った Android アプリ
 icons/                … アプリアイコン一式(16px〜512px、maskable版含む)
 icon-source.svg       … アイコンの元デザイン(編集用)

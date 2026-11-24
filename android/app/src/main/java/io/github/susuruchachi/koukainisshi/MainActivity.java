@@ -153,7 +153,7 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); }
+    protected void onPause() { super.onPause(); LauncherInstaller.onPause(); CookieManager.getInstance().flush(); }
 
     // 自動更新：閉じて（裏に回して）1分たち、書いている途中でなく、確認なしで入れられるなら入れ替える（InstallResultReceiver が入れる）
     @Override
@@ -163,6 +163,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        LauncherInstaller.maybeOffer(this); // ★【1.7.0】 すするアプリ（ランチャー）がまだなら、入れるか聞く
         // 通知の「✅ 完了にする」で完了にしたタスクを、ウェブ版に取りに来てもらう
         if (web != null && pageLoaded) web.evaluateJavascript("window.__koukaiTasksDone&&window.__koukaiTasksDone()", null);
         // 裏で入れようとしたら確認が要った：開いたときに確認を出す
