@@ -16,6 +16,10 @@
     <!-- ★【1.7.0】 すするアプリ（ランチャー）が入っているかを見る（LauncherInstaller） -->
     <queries>
         <package android:name="io.github.susuruchachi.susurulauncher" />
+        <!-- ★【1.9.0】 上のバーで、ほかの2つのアプリが入っているかを見る（LauncherBar） -->
+        <package android:name="io.github.susuruchachi.susuruanki" />
+        <package android:name="io.github.susuruchachi.koukainisshi" />
+        <package android:name="io.github.susuruchachi.kashikari" />
     </queries>
 
     <application

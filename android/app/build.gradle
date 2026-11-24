@@ -15,8 +15,8 @@ android {
         applicationId 'io.github.susuruchachi.koukainisshi'
         minSdk 24
         targetSdk 35
-        versionCode 9
-        versionName '1.8.0'
+        versionCode 10
+        versionName '1.9.0'
 
         def host = 'susuruchachi.github.io'
         def path = '/koukai-nisshi-calendar/'
