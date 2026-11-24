@@ -20,7 +20,16 @@ const emptyForm = (dateStr) => ({
   notes: '',
   recurrence: emptyRecurrence(),
   excludedDates: [],
+  budget: '', // かかりそうなお金（予算）。貸し借り帳の見通しに入る
+  income: '', // 入るお金（単発バイトなど）
 });
+// 金額の入力（全角・カンマ・円・「4000+2000」の足し算もOK）→ 数（0 なら null）
+const moneyOf = (s) => {
+  const t = String(s ?? '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/[＋]/g, '+').replace(/[,，¥￥円\s]/g, '');
+  const v = (t.match(/\d+/g) || []).reduce((a, x) => a + parseInt(x, 10), 0);
+  return v > 0 ? Math.min(v, 1e9) : null;
+};
+const yenOf = (n) => '¥' + Math.round(n || 0).toLocaleString('ja-JP');
 
 function VoyageLog() {
   const [events, setEvents] = useState([]);
@@ -38,6 +47,10 @@ function VoyageLog() {
   const eventsRef = useRef([]);
   eventsRef.current = events;
   const [sync, setSync] = useState(window.VoyageSync ? window.VoyageSync.state() : null);
+  // 貸し借り帳と連携（kashikari-link.js）
+  const [kl, setKl] = useState(window.KashikariLink ? window.KashikariLink.state() : null);
+  const [klCode, setKlCode] = useState('');
+  useEffect(() => (window.KashikariLink ? window.KashikariLink.subscribe(setKl) : undefined), []);
   const [syncOpen, setSyncOpen] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPw, setLoginPw] = useState('');
@@ -110,7 +123,13 @@ function VoyageLog() {
 
   // Android アプリ：予定や日記が変わったら、ホーム画面のウィジェットに渡す
   // すするanki の見るだけの予定（URL で購読したカレンダー・グループの予定。sync.js が読む）
-  const feeds = (sync && sync.feeds) || NO_FEEDS;
+  const ankiFeeds = (sync && sync.feeds) || NO_FEEDS;
+  // 貸し借り帳の見るだけの予定（定期の収入・支払い、返す期限、🎟 予定）も、すするanki の見るだけの予定と同じようにカレンダーに出す
+  const klFeeds = (kl && kl.feedItems) || NO_FEEDS;
+  const feeds = useMemo(() => (klFeeds.length ? ankiFeeds.concat(klFeeds) : ankiFeeds), [ankiFeeds, klFeeds]);
+  // 予算・入るお金のついた予定を、貸し借り帳に送る
+  useEffect(() => { if (loaded && window.KashikariLink) window.KashikariLink.pushKoukai(events); }, [events, loaded, kl && kl.code, kl && kl.ready]);
+  useEffect(() => { if (window.__kashikariLinked) { window.__kashikariLinked = false; showToast('💰 貸し借り帳と連携しました'); } }, []);
   useEffect(() => { if (loaded) koukaiSendWidget(events, diary, feeds); }, [events, diary, feeds, loaded]);
 
   // 日記の欄へ移る（ウィジェットの「できた事を書く」・?view=diary から）
@@ -397,6 +416,8 @@ function VoyageLog() {
       notes: master.notes,
       recurrence: master.recurrence ? { ...emptyRecurrence(), ...master.recurrence, daysOfWeek: [...(master.recurrence.daysOfWeek || [])] } : emptyRecurrence(),
       excludedDates: master.excludedDates || [],
+      budget: master.budget ? String(master.budget) : '',
+      income: master.income ? String(master.income) : '',
       _editingOccurrenceDate: ev.occurrenceDate,
     });
     setModalOpen(true);
@@ -455,6 +476,8 @@ function VoyageLog() {
       recurrence: recurrenceToSave,
       excludedDates: recurrenceToSave || endDay ? (form.excludedDates || []) : [],
       star: !!form.star,
+      budget: moneyOf(form.budget),
+      income: moneyOf(form.income),
     };
 
     let next;
@@ -575,6 +598,11 @@ function VoyageLog() {
       `}</style>
 
       <div className="w-full max-w-lg">
+      {kl && kl.code && kl.warn && kl.warn.label && (
+        <div className="mb-3 rounded-xl px-4 py-3" style={{ background: '#3A1F22', border: '1px solid #C0605A', color: '#F2C5C1' }} role="alert">
+          <p className="text-xs leading-relaxed"><b>{kl.warn.label}</b><br />貸し借り帳の見通しより（予定の予算・入るお金・定期の支払いから）。貸し借り帳の「🎟 予定」で、くわしく見られます。</p>
+        </div>
+      )}
       {apk.ready && !apk.silent && koukaiAppOutdated() && (
         <div className="mb-3 rounded-xl px-4 py-3 flex items-center gap-3" style={{ background: 'var(--brass)', color: 'var(--ink-deep)' }}>
           <p className="text-xs flex-1 leading-relaxed">
@@ -814,12 +842,18 @@ function VoyageLog() {
                       )}
                       {ev.readOnly && ev.source && (
                         <p className="text-[11px] mt-0.5" style={{ color: 'var(--brass-bright)' }}>
-                          {ev.source.kind === 'group' ? '👪' : '🔗'} {ev.source.name}（すするanki・見るだけ）
+                          {ev.source.kind === 'kashikari' ? '💰 貸し借り帳（見るだけ）' : <>{ev.source.kind === 'group' ? '👪' : '🔗'} {ev.source.name}（すするanki・見るだけ）</>}
                         </p>
                       )}
                       {ev.location && (
                         <p className="text-xs mt-1 flex items-center gap-1" style={{ color: 'var(--parchment-dim)' }}>
                           <MapPin size={11} /> {ev.location}
+                        </p>
+                      )}
+                      {(ev.budget > 0 || ev.income > 0) && (
+                        <p className="font-mono text-xs mt-1 flex flex-wrap gap-x-3" aria-label="お金">
+                          {ev.budget > 0 && <span style={{ color: '#E08A84' }}>💰 予算 {yenOf(ev.budget)}</span>}
+                          {ev.income > 0 && <span style={{ color: 'var(--signal)' }}>💴 入る {yenOf(ev.income)}</span>}
                         </p>
                       )}
                       {ev.notes && (
@@ -1372,6 +1406,25 @@ function VoyageLog() {
                 </div>
               )}
 
+              <div className="grid grid-cols-2 gap-3">
+                <label className="field block">
+                  <span className="text-xs font-medium block mb-1">💰 かかりそうなお金（予算）</span>
+                  <input type="text" inputMode="numeric" value={form.budget} placeholder="例：4000+2000"
+                    onChange={(e) => setForm({ ...form, budget: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm font-mono" />
+                </label>
+                <label className="field block">
+                  <span className="text-xs font-medium block mb-1">💴 入るお金（単発バイトなど）</span>
+                  <input type="text" inputMode="numeric" value={form.income} placeholder="例：8000"
+                    onChange={(e) => setForm({ ...form, income: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm font-mono" />
+                </label>
+              </div>
+              {(moneyOf(form.budget) || moneyOf(form.income)) && (
+                <p className="text-[11px] -mt-2" style={{ color: 'var(--parchment-dim)' }}>
+                  {moneyOf(form.budget) ? `予算 ${yenOf(moneyOf(form.budget))}` : ''}{moneyOf(form.budget) && moneyOf(form.income) ? '・' : ''}{moneyOf(form.income) ? `入る ${yenOf(moneyOf(form.income))}` : ''}
+                  {kl && kl.code ? '（貸し借り帳の見通しに入ります）' : '（「☁️」→「貸し借り帳と連携」すると、貸し借り帳の見通しに入ります）'}
+                </p>
+              )}
+
               <label className="field block">
                 <span className="text-xs font-medium block mb-1">場所 (任意)</span>
                 <input
@@ -1523,6 +1576,26 @@ function VoyageLog() {
                 <button onClick={() => runSync(() => window.VoyageSync.signOut(), 'ログアウトしました')} className="w-full py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }}>ログアウト</button>
               </div>
             )}
+            <div className="space-y-2 pt-3 mt-3" style={{ borderTop: '1px solid var(--chart-line)' }}>
+              <p className="text-sm font-medium">💰 貸し借り帳と連携</p>
+              <p className="text-xs" style={{ opacity: 0.8 }}>貸し借り帳の定期の収入・支払い、返す期限、🎟 予定を、カレンダーに出します（見るだけ）。予定に付けた「予算」「入るお金」は、貸し借り帳の見通しに入り、お金が足りなくなりそうなら知らせます。</p>
+              {kl && kl.code ? (
+                <>
+                  <p className="text-xs">
+                    {kl.error ? `⚠️ ${kl.error}` : !kl.ready ? '⏳ つないでいます…' : `✅ 連携しています（貸し借り帳から ${kl.feed.length}件）${kl.feedAt ? `・${new Date(kl.feedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} の分` : ''}`}
+                  </p>
+                  <p className="text-[11px]" style={{ opacity: 0.7 }}>{sync && sync.user ? 'ログインしているので、航海日誌のほかの端末にも連携が届きます。' : 'ログインすると、航海日誌のほかの端末にも連携が届きます。'}</p>
+                  <button onClick={() => { window.KashikariLink.clear(); showToast('貸し借り帳との連携をやめました'); }} className="w-full py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }}>連携をやめる</button>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs" style={{ opacity: 0.8 }}>貸し借り帳の「📒 自分の帳簿」→「⚙️ 設定」→「航海日誌と連携」の連携コード（またはリンク）を入れてください。</p>
+                  <input type="text" value={klCode} onChange={(e) => setKlCode(e.target.value)} placeholder="連携コード" className="w-full px-3 py-2 rounded-lg text-sm font-mono" style={{ border: '1px solid var(--chart-line)', color: 'var(--ink-deep)' }} />
+                  <button onClick={() => { if (window.KashikariLink && window.KashikariLink.setCode(klCode)) { setKlCode(''); showToast('💰 貸し借り帳と連携しました'); } else showToast('連携コードの形がちがいます', 'error'); }}
+                    className="w-full py-2 rounded-lg text-sm font-semibold" style={{ background: 'var(--brass)', color: 'var(--ink-deep)' }}>連携する</button>
+                </>
+              )}
+            </div>
             <button onClick={() => setSyncOpen(false)} className="w-full py-2 rounded-lg text-sm mt-3" style={{ border: '1px solid var(--chart-line)' }}>閉じる</button>
           </div>
         </div>
