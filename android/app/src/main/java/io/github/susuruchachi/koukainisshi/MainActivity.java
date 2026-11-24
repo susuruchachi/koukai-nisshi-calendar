@@ -75,7 +75,7 @@ public class MainActivity extends Activity {
 
         web = new WebView(this);
         web.setBackgroundColor(Color.parseColor("#131E29"));
-        setContentView(web);
+        setContentView(LauncherBar.wrap(this, web, Color.parseColor("#131E29"))); // ★【1.8.0】 上のバー（すするアプリ・ほかのアプリ）
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -163,6 +163,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        LauncherBar.refresh(this);
         LauncherInstaller.maybeOffer(this); // ★【1.7.0】 すするアプリ（ランチャー）がまだなら、入れるか聞く
         // 通知の「✅ 完了にする」で完了にしたタスクを、ウェブ版に取りに来てもらう
         if (web != null && pageLoaded) web.evaluateJavascript("window.__koukaiTasksDone&&window.__koukaiTasksDone()", null);
