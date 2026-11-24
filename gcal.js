@@ -8,6 +8,8 @@
 //   ブラウザは Google Identity Services（はじめは許可の画面。1時間たったら「つなぎ直す」を押す）。トークンはこの端末の中だけ（sessionStorage）
 //   スマホのブラウザは、ポップアップ（別のタブ）から結果が戻らず白い画面で止まることがあるので、ページごと Google に移って戻ってくる（redirect）。
 //   戻り先（このページの URL）は、Google Cloud の Web client の「承認済みのリダイレクト URI」に入れておく
+// ・iOS のアプリ（すするアプリ）：KoukaiApp.gcalAuthorize はアプリが iOS のログインの画面で Google に頼む（すするanki の ios/）。
+//   Google からは、ブラウザと同じ戻り先（このページ）の #access_token=…&state=ios-… に戻ってきて、index.html のいちばん上の部分がアプリに渡す
 // ・同期するのは、アプリ・ページを開いている間（開いたとき・予定を変えたとき・10分ごと・「今すぐ同期」）
 // 依存（呼ばれるときに）: ics-export.js の buildRRule、date-utils.js の addDaysToKey・dateKey・pad、anki-feeds.js の ankiGuessType
 (function () {

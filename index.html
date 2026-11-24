@@ -2,6 +2,22 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
+<script>
+  // iOS のアプリ（すするアプリ）の Googleカレンダーの許可：iOS のログインの画面で Google に許可をもらうと、ここ（#access_token=…&state=ios-…）に戻ってくる。
+  // ページを読み込まずに、すぐアプリ（susuruanki://gcal）に渡す。うまく移れなかったときのために「アプリに戻る」も出す（gcal.js・すするanki の ios/）
+  (function () {
+    var h = location.hash || '';
+    if (!/(^#|&)state=ios-/.test(h)) return;
+    var to = 'susuruanki://gcal' + h;
+    location.replace(to);
+    document.addEventListener('DOMContentLoaded', function () {
+      var a = document.createElement('a');
+      a.href = to; a.textContent = 'アプリに戻る';
+      a.style.cssText = 'position:fixed;left:50%;top:40%;transform:translateX(-50%);z-index:99999;padding:14px 28px;border-radius:12px;background:#C9A15C;color:#131E29;font:600 17px system-ui;text-decoration:none';
+      document.body.appendChild(a);
+    });
+  })();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>航海日誌 — VoyageLog</title>
 
