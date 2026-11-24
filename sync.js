@@ -23,7 +23,8 @@
   const ON_KEY = 'koukai-nisshi-sync';
   const DEL_KEY = 'koukai-nisshi-deleted';
   const OWNER_KEY = 'koukai-nisshi-owner';
-  const SHARED = ['title', 'date', 'allDay', 'startTime', 'endTime', 'location', 'notes', 'recurrence', 'excludedDates', 'type', 'end', 'star'];
+  // budget・income：予定にかかりそうなお金・入るお金（貸し借り帳と連携。すするanki は使わない）
+  const SHARED = ['title', 'date', 'allDay', 'startTime', 'endTime', 'location', 'notes', 'recurrence', 'excludedDates', 'type', 'end', 'star', 'budget', 'income'];
 
   let auth = null, db = null, user = null, unsub = null, remote = {}, remoteDiary = {}, ready = false, lastError = '';
   let lastSyncAt = 0, pending = false, online = typeof navigator === 'undefined' || navigator.onLine !== false;
@@ -288,6 +289,14 @@
         try { localStorage.setItem(OWNER_KEY, uid); } catch (e) {}
       }
       merge(); mergeDiary(); MAP_NAMES.forEach(mergeMap); emit();
+      // 貸し借り帳の連携コード：この端末で入れたばかり（まだアカウントに書いていない）なら書く。そうでなければアカウントのものを使う
+      if (!meta.fromCache && window.KashikariLink) {
+        const kc = snap.exists ? snap.data().kashikari : undefined;
+        let dirty = false; try { dirty = localStorage.getItem(KASHIKARI_DIRTY) === '1'; } catch (e) {}
+        const local = window.KashikariLink.state().code;
+        if (dirty || (kc === undefined && local)) setKashikari(local);
+        else if (typeof kc === 'string') window.KashikariLink.adopt(kc);
+      }
     }, (e) => { ready = false; lastError = e.code || e.message; emit(); });
     emit();
   }
@@ -338,7 +347,16 @@
     } catch (e) { lastError = e.message; }
   }
 
+  // 貸し借り帳の連携コードをアカウントに覚える（ログインしていなければ、次にログインしたときに書く）
+  const KASHIKARI_DIRTY = 'koukai-nisshi-kashikari-dirty';
+  function setKashikari(code) {
+    if (!user || !db || !isOn()) { try { localStorage.setItem(KASHIKARI_DIRTY, '1'); } catch (e) {} return; }
+    db.collection('susuru_anki_cal').doc(user.uid).set({ kashikari: code || '', updatedAt: Date.now() }, { merge: true })
+      .then(() => { try { localStorage.removeItem(KASHIKARI_DIRTY); } catch (e) {} }, () => { try { localStorage.setItem(KASHIKARI_DIRTY, '1'); } catch (e) {} });
+  }
+
   window.VoyageSync = {
+    setKashikari,
     // アプリ（VoyageLog.jsx）から：今の予定を読む関数と、予定を入れかえる関数
     attach(getFn, applyFn) { getLocal = getFn; applyLocal = applyFn; if (ready) merge(); },
     // 保存の前に呼ぶ：変わった予定に at を付け、消えた予定を覚える。at を付けた一覧を返す
