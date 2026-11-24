@@ -15,8 +15,8 @@ android {
         applicationId 'io.github.susuruchachi.koukainisshi'
         minSdk 24
         targetSdk 35
-        versionCode 8
-        versionName '1.7.0'
+        versionCode 9
+        versionName '1.8.0'
 
         def host = 'susuruchachi.github.io'
         def path = '/koukai-nisshi-calendar/'
@@ -73,4 +73,5 @@ dependencies {
     implementation 'androidx.credentials:credentials:1.3.0'
     implementation 'androidx.credentials:credentials-play-services-auth:1.3.0'
     implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
+    implementation 'com.google.android.gms:play-services-auth:21.2.0' // 📆 Googleカレンダーの許可（AuthorizationClient）
 }

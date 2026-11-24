@@ -1,5 +1,5 @@
 // --- メインコンポーネント ---
-// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, anki-feeds.js, stars.js, planner.js, app-bridge.js, icons.jsx, planner-ui.jsx
+// 依存: constants.js, date-utils.js, recurrence.js, ics-export.js, calendar-grid.js, diary.js, anki-feeds.js, stars.js, planner.js, app-bridge.js, icons.jsx, planner-ui.jsx（gcal.js・sync.js・kashikari-link.js は window から）
 
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
@@ -51,6 +51,9 @@ function VoyageLog() {
   const [kl, setKl] = useState(window.KashikariLink ? window.KashikariLink.state() : null);
   const [klCode, setKlCode] = useState('');
   useEffect(() => (window.KashikariLink ? window.KashikariLink.subscribe(setKl) : undefined), []);
+  // 📆 Googleカレンダーと同期（gcal.js）
+  const [gc, setGc] = useState(window.KoukaiGcal ? window.KoukaiGcal.state() : null);
+  useEffect(() => (window.KoukaiGcal ? window.KoukaiGcal.subscribe(setGc) : undefined), []);
   const [syncOpen, setSyncOpen] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPw, setLoginPw] = useState('');
@@ -126,7 +129,12 @@ function VoyageLog() {
   const ankiFeeds = (sync && sync.feeds) || NO_FEEDS;
   // 貸し借り帳の見るだけの予定（定期の収入・支払い、返す期限、🎟 予定）も、すするanki の見るだけの予定と同じようにカレンダーに出す
   const klFeeds = (kl && kl.feedItems) || NO_FEEDS;
-  const feeds = useMemo(() => (klFeeds.length ? ankiFeeds.concat(klFeeds) : ankiFeeds), [ankiFeeds, klFeeds]);
+  // Googleカレンダーの予定（選んだカレンダー。見るだけ）も
+  const gcFeeds = (gc && gc.feedItems) || NO_FEEDS;
+  const feeds = useMemo(() => (klFeeds.length || gcFeeds.length ? ankiFeeds.concat(klFeeds, gcFeeds) : ankiFeeds), [ankiFeeds, klFeeds, gcFeeds]);
+  // 航海日誌の予定を Googleカレンダー（「航海日誌」カレンダー）に書く：予定が変わったら少し待って送る
+  useEffect(() => { if (window.KoukaiGcal) window.KoukaiGcal.attach(() => eventsRef.current); }, []);
+  useEffect(() => { if (loaded && window.KoukaiGcal) window.KoukaiGcal.changed(); }, [events, loaded]);
   // 予算・入るお金のついた予定を、貸し借り帳に送る
   useEffect(() => { if (loaded && window.KashikariLink) window.KashikariLink.pushKoukai(events); }, [events, loaded, kl && kl.code, kl && kl.ready]);
   useEffect(() => { if (window.__kashikariLinked) { window.__kashikariLinked = false; showToast('💰 貸し借り帳と連携しました'); } }, []);
@@ -396,6 +404,13 @@ function VoyageLog() {
     selectDay(todayKey());
   };
 
+  // 見るだけの予定（Google・すするanki・貸し借り帳）を、直せる自分の予定にする（その回だけ）
+  const copyToMine = (ev) => {
+    const d = ev.instanceDate || ev.occurrenceDate || ev.date;
+    setForm({ ...emptyForm(d), title: ev.title || '', end: ev.spanEnd && ev.spanEnd > d ? ev.spanEnd : '', allDay: !!ev.allDay,
+      startTime: ev.startTime || '09:00', endTime: ev.endTime || ev.startTime || '10:00', location: ev.location || '', notes: ev.notes || '' });
+    setModalOpen(true);
+  };
   const openAddModal = (dateStr) => {
     setForm(emptyForm(dateStr || selectedKey));
     setModalOpen(true);
@@ -667,6 +682,16 @@ function VoyageLog() {
             ))}
           </div>
 
+          {gc && gc.on && gc.needsAuth && (
+            <button
+              onClick={() => window.KoukaiGcal.syncNow()}
+              className="relative mt-3 w-full text-xs py-2 rounded-lg flex items-center justify-center gap-1.5"
+              style={{ color: 'var(--ink-deep)', background: 'var(--brass)' }}
+            >
+              📆 Googleカレンダーにつなぎ直す（押すと同期します）
+            </button>
+          )}
+
           {tab === 'cal' && (
           <div className="relative flex items-center justify-between mt-4">
             <button onClick={goPrevMonth} aria-label="前の月" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
@@ -842,7 +867,9 @@ function VoyageLog() {
                       )}
                       {ev.readOnly && ev.source && (
                         <p className="text-[11px] mt-0.5" style={{ color: 'var(--brass-bright)' }}>
-                          {ev.source.kind === 'kashikari' ? '💰 貸し借り帳（見るだけ）' : <>{ev.source.kind === 'group' ? '👪' : '🔗'} {ev.source.name}（すするanki・見るだけ）</>}
+                          {ev.source.kind === 'kashikari' ? '💰 貸し借り帳（見るだけ）'
+                            : ev.source.kind === 'gcal' ? <><span style={{ color: ev.source.color || 'inherit' }}>●</span> {ev.source.name}（Googleカレンダー・見るだけ）</>
+                            : <>{ev.source.kind === 'group' ? '👪' : '🔗'} {ev.source.name}（すするanki・見るだけ）</>}
                         </p>
                       )}
                       {ev.location && (
@@ -861,6 +888,11 @@ function VoyageLog() {
                       )}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                      {ev.readOnly && (
+                        <button onClick={() => copyToMine(ev)} aria-label="自分の予定にコピー" title="自分の予定にコピー" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
+                          <Plus size={14} />
+                        </button>
+                      )}
                       <button onClick={() => handleExportOne(ev)} aria-label="この予定を書き出す" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
                         <Download size={14} />
                       </button>
@@ -1521,7 +1553,7 @@ function VoyageLog() {
 
       {syncOpen && (
         <div className="fixed inset-0 flex items-end sm:items-center justify-center z-50" style={{ background: 'rgba(8,12,16,0.6)' }} onClick={() => setSyncOpen(false)}>
-          <div className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-5" style={{ background: 'var(--parchment)', color: 'var(--ink-deep)' }} onClick={(e) => e.stopPropagation()}>
+          <div className="w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-5 max-h-[92vh] overflow-y-auto" style={{ background: 'var(--parchment)', color: 'var(--ink-deep)' }} onClick={(e) => e.stopPropagation()}>
             <h2 className="font-display text-lg mb-2">☁️ 同期（ほかの端末・すするanki）</h2>
             <p className="text-xs mb-3 leading-relaxed" style={{ opacity: 0.75 }}>
               ログインすると、<b>予定とできた事日記</b>が、同じアカウントでログインしたほかの端末（スマホ・パソコン・Android アプリ）に自動で届きます。どの端末で足した・直した・消したものも、ほかの端末に届きます（オフラインのときは、つながったら送ります）。
@@ -1574,6 +1606,54 @@ function VoyageLog() {
                   </div>
                 )}
                 <button onClick={() => runSync(() => window.VoyageSync.signOut(), 'ログアウトしました')} className="w-full py-2 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }}>ログアウト</button>
+              </div>
+            )}
+            {gc && (
+              <div className="space-y-2 pt-3 mt-3" style={{ borderTop: '1px solid var(--chart-line)' }} aria-label="Googleカレンダー">
+                <p className="text-sm font-medium">📆 Googleカレンダーと同期</p>
+                <p className="text-xs leading-relaxed" style={{ opacity: 0.8 }}>
+                  航海日誌の予定を、Googleカレンダーの中の「航海日誌」カレンダーに自動で書きます（メインのカレンダーには書きません）。
+                  下で選んだカレンダー（家族と共有しているものも）の予定を、ここに見るだけで出します。同期するのは、アプリ・ページを開いている間です。
+                </p>
+                {!gc.on ? (
+                  <button onClick={() => window.KoukaiGcal.connect()} className="w-full py-2.5 rounded-lg text-sm font-semibold" style={{ background: 'var(--ink-deep)', color: 'var(--parchment)' }}>
+                    Googleカレンダーとつなぐ
+                  </button>
+                ) : (
+                  <>
+                    <p className="text-xs">
+                      {gc.busy ? '⏳ 同期しています…'
+                        : gc.needsAuth ? '🔑 Google の許可が切れています。「つなぎ直す」を押してください'
+                        : gc.error ? `⚠️ 同期できません（${gc.error}）`
+                        : gc.lastSync ? `✅ 同期しています（Googleへ ${gc.pushed}件・Googleから ${gc.feedItems.length}件）・${new Date(gc.lastSync).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
+                        : '⏳ つないでいます…'}
+                    </p>
+                    {gc.calendars.length > 0 && (
+                      <div className="rounded-lg p-2 space-y-1" style={{ background: 'rgba(60,90,110,0.08)', border: '1px solid var(--chart-line)' }}>
+                        <p className="text-[11px] font-medium" style={{ opacity: 0.8 }}>ここに出すカレンダー</p>
+                        {gc.calendars.filter((c) => c.id !== gc.calId).map((c) => {
+                          const on = (gc.selected || []).includes(c.id);
+                          return (
+                            <label key={c.id} className="flex items-center gap-2 text-xs">
+                              <input type="checkbox" checked={on} onChange={() => window.KoukaiGcal.setSelected(on ? gc.selected.filter((x) => x !== c.id) : [...(gc.selected || []), c.id])} />
+                              <span style={{ color: c.color }}>●</span>
+                              <span className="truncate">{c.name}{c.primary ? '（メイン）' : ''}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <button onClick={() => window.KoukaiGcal.syncNow()} className="flex-1 py-2 rounded-lg text-sm font-semibold" style={{ background: 'var(--brass)', color: 'var(--ink-deep)' }}>
+                        {gc.needsAuth ? 'つなぎ直す' : '🔄 今すぐ同期'}
+                      </button>
+                      <button onClick={() => { window.KoukaiGcal.disconnect(); showToast('Googleカレンダーとの同期をやめました'); }} className="py-2 px-3 rounded-lg text-sm" style={{ border: '1px solid var(--chart-line)' }}>
+                        やめる
+                      </button>
+                    </div>
+                    <p className="text-[11px]" style={{ opacity: 0.7 }}>「航海日誌」カレンダーは Google 側で直しても航海日誌には戻りません（直すときは航海日誌で）。やめても Google の「航海日誌」カレンダーは残るので、いらなければ Googleカレンダーの設定から消してください。</p>
+                  </>
+                )}
               </div>
             )}
             <div className="space-y-2 pt-3 mt-3" style={{ borderTop: '1px solid var(--chart-line)' }}>
