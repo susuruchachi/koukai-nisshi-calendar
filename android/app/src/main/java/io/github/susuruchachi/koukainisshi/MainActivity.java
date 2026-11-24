@@ -41,6 +41,10 @@ import androidx.credentials.exceptions.ClearCredentialException;
 import androidx.credentials.exceptions.GetCredentialCancellationException;
 import androidx.credentials.exceptions.GetCredentialException;
 
+import com.google.android.gms.auth.api.identity.AuthorizationRequest;
+import com.google.android.gms.auth.api.identity.AuthorizationResult;
+import com.google.android.gms.auth.api.identity.Identity;
+import com.google.android.gms.common.api.Scope;
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption;
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential;
 
@@ -50,11 +54,14 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final String LOGIN_PREFS = "koukai_login";
+    private static final int REQ_GCAL = 1301;
     private WebView web;
     private boolean pageLoaded = false;
     private final Executor bg = Executors.newSingleThreadExecutor();
@@ -75,7 +82,7 @@ public class MainActivity extends Activity {
 
         web = new WebView(this);
         web.setBackgroundColor(Color.parseColor("#131E29"));
-        setContentView(LauncherBar.wrap(this, web, Color.parseColor("#131E29"))); // ★【1.8.0】 上のバー（すするアプリ・ほかのアプリ）
+        setContentView(LauncherBar.wrap(this, web, Color.parseColor("#131E29"))); // ★【1.9.0】 上のバー（すするアプリ・ほかのアプリ）
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -196,6 +203,23 @@ public class MainActivity extends Activity {
         p.edit().remove("state").putString("pending", o.toString()).apply();
     }
 
+    // 📆 Googleカレンダーのトークンをウェブ版（gcal.js）に渡す
+    private void gcalResult(String token, String err, boolean needsUi) {
+        String js = "window.__koukaiGcalToken&&window.__koukaiGcalToken(" + JSONObject.quote(token == null ? "" : token) + "," + JSONObject.quote(err == null ? "" : err) + "," + needsUi + ")";
+        runOnUiThread(() -> web.evaluateJavascript(js, null));
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_GCAL) return;
+        try {
+            AuthorizationResult r = Identity.getAuthorizationClient(this).getAuthorizationResultFromIntent(data);
+            if (r.getAccessToken() != null) gcalResult(r.getAccessToken(), null, false);
+            else gcalResult(null, "Googleカレンダーの許可がもらえませんでした", true);
+        } catch (Exception e) { gcalResult(null, "Googleカレンダーの許可がもらえませんでした", true); }
+    }
+
     // ログインの結果をウェブ版に渡す（KoukaiApp.takeLogin で受け取る）
     private void deliverLogin(JSONObject o) {
         getSharedPreferences(LOGIN_PREFS, Context.MODE_PRIVATE).edit().putString("pending", o.toString()).apply();
@@ -268,6 +292,27 @@ public class MainActivity extends Activity {
             String v = p.getString("pending", "");
             if (!v.isEmpty()) p.edit().remove("pending").apply();
             return v;
+        }
+
+        // ---- 📆 Googleカレンダー（gcal.js から）：Google に許可（スコープ）を頼んで、アクセストークンをもらう ----
+        //  一度許可すれば、あとは画面を出さずに何度でももらえる。interactive が false で許可の画面が要るときは needsUi で返す
+        @JavascriptInterface public void gcalAuthorize(String scopes, boolean interactive) {
+            runOnUiThread(() -> {
+                try {
+                    List<Scope> list = new ArrayList<>();
+                    for (String sc : scopes.split(" ")) if (!sc.isEmpty()) list.add(new Scope(sc));
+                    AuthorizationRequest req = AuthorizationRequest.builder().setRequestedScopes(list).build();
+                    Identity.getAuthorizationClient(MainActivity.this).authorize(req)
+                        .addOnSuccessListener(r -> {
+                            if (r.hasResolution()) {
+                                if (!interactive || r.getPendingIntent() == null) { gcalResult(null, "Googleカレンダーの許可が要ります", true); return; }
+                                try { startIntentSenderForResult(r.getPendingIntent().getIntentSender(), REQ_GCAL, null, 0, 0, 0); }
+                                catch (Exception e) { gcalResult(null, "許可の画面を開けませんでした", true); }
+                            } else gcalResult(r.getAccessToken(), null, false);
+                        })
+                        .addOnFailureListener(e -> gcalResult(null, "Google に断られました（" + e.getMessage() + "）", true));
+                } catch (Exception e) { gcalResult(null, e.getMessage(), true); }
+            });
         }
 
         // ---- 🔔 タスクのアラーム（app-bridge.js の koukaiSetAlarms から） ----
