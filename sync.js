@@ -24,7 +24,7 @@
   const DEL_KEY = 'koukai-nisshi-deleted';
   const OWNER_KEY = 'koukai-nisshi-owner';
   // budget・income：予定にかかりそうなお金・入るお金（貸し借り帳と連携。すするanki は使わない）
-  const SHARED = ['title', 'date', 'allDay', 'startTime', 'endTime', 'location', 'notes', 'recurrence', 'excludedDates', 'type', 'end', 'star', 'budget', 'income'];
+  const SHARED = ['title', 'date', 'allDay', 'startTime', 'endTime', 'location', 'notes', 'recurrence', 'excludedDates', 'type', 'end', 'star', 'gcalId', 'budget', 'income'];
 
   let auth = null, db = null, user = null, unsub = null, remote = {}, remoteDiary = {}, ready = false, lastError = '';
   let lastSyncAt = 0, pending = false, online = typeof navigator === 'undefined' || navigator.onLine !== false;

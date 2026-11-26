@@ -1,27 +1,28 @@
 // --- 📆 Googleカレンダーと同期 ---
-// ・航海日誌 → Google：Googleカレンダーの中に、このアプリが作った「航海日誌」カレンダーに、航海日誌の予定を書く（直す・消すも）。
-//   メインのカレンダーには書かない（おかしくなっても「航海日誌」カレンダーを消せば元どおり）。Google 側で直しても航海日誌には戻らない
-// ・Google → 航海日誌：選んだカレンダー（メイン・家族と共有しているカレンダーなど）の予定を、見るだけの予定としてカレンダー・ウィジェットに出す
-// ・許可（スコープ）はせまく：calendar.app.created（このアプリが作ったカレンダーだけ書ける）・calendar.calendarlist.readonly（カレンダーの一覧）・
-//   calendar.events.readonly（予定を読む）
+// ・航海日誌 ⇄ Google の「航海日誌」カレンダー（このアプリが作ったカレンダー）：航海日誌の予定を書き（直す・消すも）、
+//   Google でその「航海日誌」カレンダーの予定を直す・足す・消すと、航海日誌にも届く（両方で変えたときは、あとで変えた方）。メインのカレンダーには書かない
+// ・Google → 航海日誌：選んだカレンダー（メイン・家族と共有しているカレンダーなど）の予定を、カレンダー・ウィジェットに出す。
+//   書きこめるカレンダー（自分のもの・編集できる共有）の予定は、航海日誌から直す・消すこともできる（繰り返しの予定は、その回だけ）
+// ・許可（スコープ）：calendar.app.created（このアプリが作ったカレンダー）・calendar.calendarlist.readonly（カレンダーの一覧）・
+//   calendar.events（予定を読む・直す。前は calendar.events.readonly だったので、許可をもらい直す）
 // ・アクセストークン（1時間）：Android アプリはアプリが Google に頼む（KoukaiApp.gcalAuthorize。一度許可すれば、あとは画面なしで何度でも）。
 //   ブラウザは Google Identity Services（はじめは許可の画面。1時間たったら「つなぎ直す」を押す）。トークンはこの端末の中だけ（sessionStorage）
 //   スマホのブラウザは、ポップアップ（別のタブ）から結果が戻らず白い画面で止まることがあるので、ページごと Google に移って戻ってくる（redirect）。
 //   戻り先（このページの URL）は、Google Cloud の Web client の「承認済みのリダイレクト URI」に入れておく
 // ・iOS のアプリ（すするアプリ）：KoukaiApp.gcalAuthorize はアプリが iOS のログインの画面で Google に頼む（すするanki の ios/）。
 //   Google からは、ブラウザと同じ戻り先（このページ）の #access_token=…&state=ios-… に戻ってきて、index.html のいちばん上の部分がアプリに渡す
-// ・同期するのは、アプリ・ページを開いている間（開いたとき・予定を変えたとき・10分ごと・「今すぐ同期」）
+// ・同期するのは、アプリ・ページを開いている間（開いたとき・予定を変えたとき・5分ごと・アプリに戻ったとき・「今すぐ同期」）
 // 依存（呼ばれるときに）: ics-export.js の buildRRule、date-utils.js の addDaysToKey・dateKey・pad、anki-feeds.js の ankiGuessType
 (function () {
   const CLIENT_ID = '926791749187-pq139a7m09tnp8pupfineqp8ibruhu9v.apps.googleusercontent.com';
   const SCOPES = [
     'https://www.googleapis.com/auth/calendar.app.created',
     'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
-    'https://www.googleapis.com/auth/calendar.events.readonly',
+    'https://www.googleapis.com/auth/calendar.events',
   ];
   const API = 'https://www.googleapis.com/calendar/v3';
   const CAL_NAME = '航海日誌';
-  const K = { on: 'koukai-nisshi-gcal-on', sel: 'koukai-nisshi-gcal-sel', cal: 'koukai-nisshi-gcal-calid', pushed: 'koukai-nisshi-gcal-pushed',
+  const K = { on: 'koukai-nisshi-gcal-on', sel: 'koukai-nisshi-gcal-sel', cal: 'koukai-nisshi-gcal-calid', pushed: 'koukai-nisshi-gcal-sent',
     cache: 'koukai-nisshi-gcal-cache', token: 'koukai-nisshi-gcal-token' };
   const ls = {
     get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -30,18 +31,21 @@
   const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tokyo'; } catch (e) { return 'Asia/Tokyo'; } })();
 
   let getEvents = () => [];
+  let applyEvents = null; // VoyageLog の persist（Google で変わった予定を航海日誌に入れる）
   let token = null; // { value, exp }
   try { const t = JSON.parse(sessionStorage.getItem(K.token) || 'null'); if (t && t.exp > Date.now() + 60000) token = t; } catch (e) {}
   const cache = ls.get(K.cache, {}) || {};
   const st = {
     on: !!ls.get(K.on, false), needsAuth: false, busy: false, error: '', lastSync: cache.at || 0,
     calendars: cache.calendars || [], selected: ls.get(K.sel, null), feedItems: [], pushed: 0, calId: ls.get(K.cal, ''),
+    failed: [], // Google に送れなかった予定 [{ title, message }]
+    fromGoogle: 0, // 前の同期で Google から航海日誌に入れた数
   };
   let feed = cache.feed || [];
   const listeners = new Set();
   function emit() {
     st.feedItems = st.on ? feed : [];
-    st.pushed = Object.keys(ls.get(K.pushed, {}) || {}).length;
+    st.pushed = Object.keys((ls.get(K.pushed, {}) || {}).items || {}).length;
     const s = { ...st };
     listeners.forEach((fn) => { try { fn(s); } catch (e) {} });
   }
@@ -141,6 +145,12 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     if (r.status === 401) { dropToken(); throw Object.assign(new Error('Google のログインが切れました'), { needsUi: true }); }
+    if (r.status === 403) {
+      const j0 = await r.clone().json().catch(() => null);
+      const reason = j0 && j0.error && ((j0.error.errors || [])[0] || {}).reason;
+      // 前の許可（calendar.events.readonly）のままのとき：許可をもらい直す
+      if (reason === 'insufficientPermissions' || /insufficient/i.test((j0 && j0.error && j0.error.message) || '')) { dropToken(); throw Object.assign(new Error('許可をもらい直してください'), { needsUi: true }); }
+    }
     if (r.status === 204) return null;
     const j = await r.json().catch(() => null);
     if (!r.ok) throw Object.assign(new Error((j && j.error && j.error.message) || ('HTTP ' + r.status)), { status: r.status });
@@ -162,8 +172,9 @@
     const icons = typeof TYPE_ICONS !== 'undefined' ? TYPE_ICONS : {};
     const out = {
       summary: `${ev.star ? '★ ' : ''}${icons[ev.type] ? icons[ev.type] + ' ' : ''}${ev.title || '（名前なし）'}`,
-      description: `${ev.notes ? ev.notes + '\n\n' : ''}— 航海日誌から（ここで直しても航海日誌には戻りません。直すときは航海日誌で）`,
+      description: `${ev.notes ? ev.notes + '\n\n' : ''}${FOOTER}`,
       location: ev.location || '',
+      status: 'confirmed', // 前に Google で消した予定でも、航海日誌にあれば元に戻す
       extendedProperties: { private: { koukaiId: String(ev.id) } },
     };
     const recurrence = [];
@@ -178,7 +189,7 @@
       if (endDate === ev.date && et <= st0) et = plusHour(st0);
       out.start = { dateTime: `${ev.date}T${st0}:00`, timeZone: tz };
       out.end = { dateTime: `${endDate}T${et}:00`, timeZone: tz };
-      if (multi && !rec) recurrence.push(`RRULE:FREQ=DAILY;UNTIL=${ev.end.replace(/-/g, '')}T235959Z`);
+      if (multi && !rec) { recurrence.push(`RRULE:FREQ=DAILY;UNTIL=${ev.end.replace(/-/g, '')}T235959Z`); out.extendedProperties.private.koukaiSpan = '1'; }
     }
     if (rec && typeof buildRRule === 'function') {
       let r = buildRRule(ev.recurrence);
@@ -192,6 +203,64 @@
     }
     if (recurrence.length) out.recurrence = recurrence;
     return out;
+  }
+
+  const FOOTER = '— 航海日誌の予定（Google で直しても、航海日誌に届きます）';
+  // 航海日誌の予定 → Google に送る中身（くらべるための文字列）
+  const bodyKey = (ev) => JSON.stringify(toGoogle(ev));
+  const gidOf = (ev) => ev.gcalId || gid(ev.id);
+
+  // ---------- Google の「航海日誌」カレンダーの予定 → 航海日誌の予定（Google で直されたとき）----------
+  const ymd = (s) => `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  function parseRecurrence(lines) {
+    let rec = null; const ex = [];
+    (lines || []).forEach((line) => {
+      const i = line.indexOf(':'); if (i < 0) return;
+      const head = line.slice(0, i).toUpperCase(), val = line.slice(i + 1);
+      if (head === 'RRULE') {
+        const r = {}; val.split(';').forEach((kv) => { const [k, v] = kv.split('='); r[(k || '').toUpperCase()] = v; });
+        const freq = { DAILY: 'daily', WEEKLY: 'weekly', MONTHLY: 'monthly', YEARLY: 'yearly' }[r.FREQ];
+        if (!freq) return;
+        const days = r.BYDAY ? r.BYDAY.split(',').map((x) => ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'].indexOf(x.replace(/[^A-Z]/g, ''))).filter((x) => x >= 0) : [];
+        rec = { freq, interval: Math.max(1, Number(r.INTERVAL) || 1), daysOfWeek: freq === 'weekly' ? days.sort() : [],
+          endType: r.UNTIL ? 'until' : r.COUNT ? 'count' : 'never', endDate: r.UNTIL ? ymd(r.UNTIL) : null, endCount: r.COUNT ? Number(r.COUNT) : null };
+      } else if (head.startsWith('EXDATE')) {
+        val.split(',').forEach((v) => { if (/^\d{8}/.test(v)) ex.push(ymd(v)); });
+      }
+    });
+    return { rec, ex };
+  }
+  // base：今の航海日誌の予定（あれば）。航海日誌だけにある項目（種類・予算など）は base のまま
+  function fromGoogleOwn(item, base, cancelledDates) {
+    const icons = typeof TYPE_ICONS !== 'undefined' ? TYPE_ICONS : {};
+    let title = item.summary || '（名前なし）', star = false;
+    if (title.startsWith('★ ')) { star = true; title = title.slice(2); }
+    const type = base && base.type;
+    if (type && icons[type] && title.startsWith(icons[type] + ' ')) title = title.slice(icons[type].length + 1);
+    let notes = String(item.description || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+    const fi = notes.lastIndexOf('— 航海日誌');
+    if (fi >= 0) notes = notes.slice(0, fi);
+    notes = notes.replace(/\s+$/, '');
+    const ev = { ...(base || {}), title, notes, location: item.location || '', star };
+    delete ev.end;
+    const { rec, ex } = parseRecurrence(item.recurrence);
+    const span = item.extendedProperties && item.extendedProperties.private && item.extendedProperties.private.koukaiSpan === '1';
+    if (item.start.date) {
+      ev.allDay = true; ev.date = item.start.date;
+      const last = item.end && item.end.date ? addDaysToKey(item.end.date, -1) : ev.date;
+      if (last > ev.date) ev.end = last;
+      ev.startTime = (base && base.startTime) || '09:00'; ev.endTime = (base && base.endTime) || '10:00';
+    } else {
+      const a = localParts(item.start.dateTime), b = item.end && item.end.dateTime ? localParts(item.end.dateTime) : a;
+      ev.allDay = false; ev.date = a.date; ev.startTime = a.time; ev.endTime = b.time;
+      if (b.date > a.date) ev.end = b.date;
+    }
+    // 時刻のある、何日か続く予定（繰り返さない）は、Google では「毎日」にして送っている（koukaiSpan）。それなら元の形に戻す
+    if (span && rec && rec.freq === 'daily' && rec.interval === 1 && rec.endDate && !ev.allDay) { ev.end = rec.endDate > ev.date ? rec.endDate : ''; ev.recurrence = null; }
+    else ev.recurrence = rec;
+    if (!ev.end) delete ev.end;
+    ev.excludedDates = [...new Set([...ex, ...(cancelledDates || [])])].sort();
+    return ev;
   }
 
   // Google の予定 → 見るだけの予定（すするanki の形。anki-feeds.js の ankiFeedOccurrences で出す）
@@ -217,6 +286,8 @@
     // 種類は名前から（何日か続くだけで「試験期間」にはしない。家族旅行などがあるため）
     ev.type = typeof ankiGuessType === 'function' ? ankiGuessType(title, false, !!item.recurringEventId, !!ev.start) : 'event';
     if (ev.end && /試験期間|考査/.test(title)) ev.type = 'exam';
+    // 書きこめるカレンダーなら、航海日誌から直せる（繰り返しの予定は、その回だけ）
+    ev.gcal = { calId: cal.id, eventId: item.id, recurring: !!item.recurringEventId, editable: !!cal.canEdit, calName: cal.name };
     return { id: `gc_${cal.id}_${item.id}`, ev, source: { kind: 'gcal', name: cal.name, color: cal.color } };
   }
 
@@ -241,7 +312,7 @@
     let page = '';
     for (let g = 0; g < 5; g++) {
       const j = await api(`/users/me/calendarList?maxResults=250${page ? '&pageToken=' + encodeURIComponent(page) : ''}`);
-      (j.items || []).forEach((c) => items.push({ id: c.id, name: c.summaryOverride || c.summary || c.id, color: c.backgroundColor || '#7FB69E', primary: !!c.primary, owner: c.accessRole === 'owner' }));
+      (j.items || []).forEach((c) => items.push({ id: c.id, name: c.summaryOverride || c.summary || c.id, color: c.backgroundColor || '#7FB69E', primary: !!c.primary, owner: c.accessRole === 'owner', canEdit: c.accessRole === 'owner' || c.accessRole === 'writer' }));
       if (!j.nextPageToken) break; page = j.nextPageToken;
     }
     st.calendars = items;
@@ -257,33 +328,123 @@
     return errs;
   }
 
-  async function push(calId) {
-    const pushed = ls.get(K.pushed, {}) || {};
-    const events = (getEvents() || []).filter((e) => e && e.id && e.date);
-    const want = {};
-    events.forEach((e) => { want[gid(e.id)] = toGoogle(e); });
-    const ups = Object.entries(want).filter(([g, body]) => pushed[g] !== JSON.stringify(body));
-    let dels = Object.keys(pushed).filter((g) => !want[g]);
-    // 予定がまとめて消えたように見えるとき（アカウントを替えた直後など）は、Google から消さない
-    if (dels.length > 3 && dels.length >= Object.keys(pushed).length) dels = [];
-    const cal = encodeURIComponent(calId);
-    const errs = await pool(ups, 4, async ([g, body]) => {
-      try { await api(`/calendars/${cal}/events/${g}`, { method: 'PUT', body: { ...body, id: g } }); }
-      catch (e) {
-        if (e.status !== 404) throw e;
-        try { await api(`/calendars/${cal}/events`, { method: 'POST', body: { ...body, id: g } }); }
-        catch (e2) { if (e2.status !== 409) throw e2; await api(`/calendars/${cal}/events/${g}`, { method: 'PUT', body: { ...body, id: g } }); }
+  // 送った記録：{ calId, items: { Googleの予定id: { h: 送った中身, etag: Google の版, id: 航海日誌の予定id } } }
+  // 「航海日誌」カレンダーが変わったら（消して作り直したなど）、記録を消して全部送り直す
+  function sentFor(calId) {
+    const m = ls.get(K.pushed, null);
+    return m && m.calId === calId && m.items ? m : { calId, items: {} };
+  }
+  const saveSent = (m) => ls.set(K.pushed, m);
+  function deletedIds() { try { return JSON.parse(localStorage.getItem('koukai-nisshi-deleted') || '{}') || {}; } catch (e) { return {}; } }
+
+  // ① Google の「航海日誌」カレンダーで直された・足された・消された予定を、航海日誌に入れる
+  async function pullOwn(calId, sent) {
+    const items = [];
+    let page = '';
+    for (let g = 0; g < 8; g++) {
+      const j = await api(`/calendars/${encodeURIComponent(calId)}/events?showDeleted=true&maxResults=2500${page ? '&pageToken=' + encodeURIComponent(page) : ''}`);
+      items.push(...(j.items || []));
+      if (!j.nextPageToken) break; page = j.nextPageToken;
+    }
+    // 繰り返しの予定の「この回だけ消した」（Google では消えた回）→ 除外日
+    const cancelledOf = {};
+    items.forEach((it) => {
+      if (it.recurringEventId && it.status === 'cancelled' && it.originalStartTime) {
+        const o = it.originalStartTime.date || localParts(it.originalStartTime.dateTime).date;
+        (cancelledOf[it.recurringEventId] = cancelledOf[it.recurringEventId] || []).push(o);
       }
-      pushed[g] = JSON.stringify(body); ls.set(K.pushed, pushed);
     });
-    errs.push(...await pool(dels, 4, async (g) => {
-      try { await api(`/calendars/${cal}/events/${g}`, { method: 'DELETE' }); }
-      catch (e) { if (e.status !== 404 && e.status !== 410) throw e; }
-      delete pushed[g]; ls.set(K.pushed, pushed);
-    }));
-    if (errs.length) throw errs[0];
+    const events = (getEvents() || []).filter((e) => e && e.id && e.date);
+    const byG = {}; events.forEach((e) => { byG[gidOf(e)] = e; });
+    const dels = deletedIds();
+    let next = null; const edit = () => (next = next || events.slice());
+    let n = 0;
+    for (const it of items) {
+      if (it.recurringEventId) continue; // 1回だけ直した回は、元の繰り返しのまま（消した回は上の除外日）
+      const rec = sent.items[it.id];
+      const local = byG[it.id];
+      const kid = it.extendedProperties && it.extendedProperties.private && it.extendedProperties.private.koukaiId;
+      const gUpdated = Date.parse(it.updated || '') || 0;
+      if (it.status === 'cancelled') {
+        // Google で消された：航海日誌の方が新しく直していなければ、航海日誌からも消す
+        if (local && rec && gUpdated > (local.at || 0)) {
+          const k = edit().findIndex((e) => e.id === local.id); if (k >= 0) next.splice(k, 1);
+          delete sent.items[it.id]; n++;
+        }
+        continue;
+      }
+      if (local) {
+        // まだ送った記録が無い（はじめて・この版にしたすぐあと）→ 航海日誌の方を正として、②で送る
+        if (!rec || rec.etag === it.etag) continue;
+        const conv = fromGoogleOwn(it, local, cancelledOf[it.id]);
+        if (bodyKey(conv) === bodyKey(local)) { sent.items[it.id] = { h: bodyKey(local), etag: it.etag, id: local.id }; continue; }
+        const localChanged = rec.h !== bodyKey(local);
+        if (!localChanged || gUpdated > (local.at || 0)) {
+          const k = edit().findIndex((e) => e.id === local.id); if (k >= 0) next[k] = { ...conv, id: local.id };
+          sent.items[it.id] = { h: bodyKey(next[k]), etag: it.etag, id: local.id }; n++;
+        }
+        continue;
+      }
+      // 航海日誌に無い予定
+      if (kid && dels[kid]) {
+        // 航海日誌で消した予定（ほかの端末で消して、Google にまだ残っている）→ Google からも消す
+        try { await api(`/calendars/${encodeURIComponent(calId)}/events/${it.id}`, { method: 'DELETE' }); } catch (e) { if (e.needsUi) throw e; }
+        delete sent.items[it.id];
+        continue;
+      }
+      if (kid) continue; // ほかの端末が送った予定（航海日誌の同期でまだ届いていない）→ 届くのを待つ
+      if (rec) continue; // 送ったことがある → 航海日誌で消された（下の送る段で Google からも消す）
+      // Google の「航海日誌」カレンダーで足された予定 → 航海日誌の予定にする（Google の予定の id を gcalId に覚える）
+      const id = typeof generateId === 'function' ? generateId() : 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      const ev = { ...fromGoogleOwn(it, null, cancelledOf[it.id]), id, gcalId: it.id, type: 'event' };
+      edit().push(ev);
+      sent.items[it.id] = { h: '', etag: it.etag, id }; // 航海日誌の id を Google にも書くため、次の段で送る
+      n++;
+    }
+    saveSent(sent);
+    if (next && applyEvents) await applyEvents(next);
+    st.fromGoogle = n;
   }
 
+  // ② 航海日誌の予定を Google の「航海日誌」カレンダーに送る（中身が変わったものだけ）。航海日誌で消したものは Google からも消す
+  async function push(calId, sent) {
+    const events = (getEvents() || []).filter((e) => e && e.id && e.date);
+    const want = {};
+    events.forEach((e) => { want[gidOf(e)] = e; });
+    const ups = Object.entries(want).filter(([g, ev]) => !sent.items[g] || sent.items[g].h !== bodyKey(ev));
+    let dels = Object.keys(sent.items).filter((g) => !want[g]);
+    // 予定がまとめて消えたように見えるとき（アカウントを替えた直後など）は、Google から消さない
+    if (dels.length > 3 && dels.length >= Object.keys(sent.items).length) dels = [];
+    const cal = encodeURIComponent(calId);
+    const failed = [];
+    await pool(ups, 4, async ([g, ev]) => {
+      const body = { ...toGoogle(ev), id: g };
+      try {
+        let r;
+        const put = () => api(`/calendars/${cal}/events/${g}`, { method: 'PUT', body });
+        const post = () => api(`/calendars/${cal}/events`, { method: 'POST', body });
+        if (sent.items[g]) {
+          // 送ったことがある → 直す（無ければ作る）
+          try { r = await put(); } catch (e) { if (e.status !== 404) throw e; r = await post(); }
+        } else {
+          // はじめて → 作る（もうあれば直す：ほかの端末が送った・前に送った記録が消えた）
+          try { r = await post(); } catch (e) { if (e.status !== 409) throw e; r = await put(); }
+        }
+        sent.items[g] = { h: bodyKey(ev), etag: r && r.etag, id: ev.id }; saveSent(sent);
+      } catch (e) {
+        if (e.needsUi) throw e;
+        failed.push({ title: ev.title || '（名前なし）', date: ev.date, message: e.message || String(e) });
+      }
+    });
+    await pool(dels, 4, async (g) => {
+      try { await api(`/calendars/${cal}/events/${g}`, { method: 'DELETE' }); }
+      catch (e) { if (e.needsUi) throw e; if (e.status !== 404 && e.status !== 410) { failed.push({ title: '（消した予定）', message: e.message }); return; } }
+      delete sent.items[g]; saveSent(sent);
+    });
+    st.failed = failed;
+  }
+
+  // ③ 選んだカレンダーの予定を読む（書きこめるカレンダーの予定は、航海日誌から直せる）
   async function pull() {
     const now = new Date();
     const timeMin = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString();
@@ -313,7 +474,9 @@
         if (interactive) await getToken(true);
         await loadCalendars();
         const calId = await ensureCalendar();
-        await push(calId);
+        const sent = sentFor(calId);
+        await pullOwn(calId, sent);
+        await push(calId, sent);
         await pull();
         st.needsAuth = false; st.lastSync = Date.now();
         ls.set(K.cache, { at: st.lastSync, calendars: st.calendars, feed });
@@ -327,25 +490,49 @@
     return running;
   }
 
+  // ---------- 航海日誌から、Google のほかのカレンダーの予定を直す・消す ----------
+  // f：{ calId, eventId, title, date, end, allDay, startTime, endTime, location, notes }（繰り返しの予定は、その回の eventId なので、その回だけ）
+  async function saveGoogleEvent(f) {
+    await getToken(true);
+    const multi = f.end && f.end > f.date;
+    const body = { summary: f.title || '（名前なし）', location: f.location || '', description: f.notes || '' };
+    if (f.allDay) { body.start = { date: f.date }; body.end = { date: addDaysToKey(multi ? f.end : f.date, 1) }; }
+    else {
+      const st0 = f.startTime || '09:00'; let et = f.endTime || st0; const endDate = multi ? f.end : f.date;
+      if (endDate === f.date && et <= st0) et = plusHour(st0);
+      body.start = { dateTime: `${f.date}T${st0}:00`, timeZone: tz }; body.end = { dateTime: `${endDate}T${et}:00`, timeZone: tz };
+    }
+    await api(`/calendars/${encodeURIComponent(f.calId)}/events/${encodeURIComponent(f.eventId)}`, { method: 'PATCH', body });
+    await pull(); ls.set(K.cache, { at: st.lastSync, calendars: st.calendars, feed }); emit();
+  }
+  async function deleteGoogleEvent(f) {
+    await getToken(true);
+    try { await api(`/calendars/${encodeURIComponent(f.calId)}/events/${encodeURIComponent(f.eventId)}`, { method: 'DELETE' }); }
+    catch (e) { if (e.status !== 404 && e.status !== 410) throw e; }
+    feed = feed.filter((x) => !(x.ev && x.ev.gcal && x.ev.gcal.eventId === f.eventId && x.ev.gcal.calId === f.calId));
+    ls.set(K.cache, { at: st.lastSync, calendars: st.calendars, feed }); emit();
+  }
+
   let pushTimer = null;
   window.KoukaiGcal = {
     subscribe(fn) { listeners.add(fn); fn({ ...st, feedItems: st.on ? feed : [] }); return () => listeners.delete(fn); },
     state: () => ({ ...st }),
-    // VoyageLog から：今の予定を読む関数（変わったら changed を呼んでもらう）
-    attach(fn) { getEvents = fn; if (st.on) setTimeout(() => sync(false), 1500); },
+    // VoyageLog から：今の予定を読む関数と、Google で変わった予定を入れる関数（persist）
+    attach(fn, applyFn) { getEvents = fn; if (applyFn) applyEvents = applyFn; if (st.on) setTimeout(() => sync(false), 1500); },
     changed() { if (!st.on) return; clearTimeout(pushTimer); pushTimer = setTimeout(() => sync(false), 4000); },
     // つなぐ（ボタンから：許可の画面を出す）・切る
     connect() { st.on = true; ls.set(K.on, true); emit(); return sync(true); },
     disconnect() { st.on = false; st.needsAuth = false; st.error = ''; ls.set(K.on, false); dropToken(); emit(); },
     syncNow() { return sync(true); },
     setSelected(ids) { st.selected = ids; ls.set(K.sel, ids); emit(); return sync(false); },
-    _toGoogle: toGoogle, _fromGoogle: fromGoogle, _gid: gid,
+    saveGoogleEvent, deleteGoogleEvent,
+    _toGoogle: toGoogle, _fromGoogle: fromGoogle, _fromGoogleOwn: fromGoogleOwn, _gid: gid,
   };
 
-  // 開いている間は10分ごと。アプリに戻ったときも（前の同期から5分たっていれば）
-  setInterval(() => { if (st.on && document.visibilityState === 'visible') sync(false); }, 10 * 60000);
+  // 開いている間は5分ごと（Google で直した分が届くように）。アプリに戻ったときも（前の同期から2分たっていれば）
+  setInterval(() => { if (st.on && document.visibilityState === 'visible') sync(false); }, 5 * 60000);
   document.addEventListener('visibilitychange', () => {
-    if (st.on && document.visibilityState === 'visible' && Date.now() - st.lastSync > 5 * 60000) sync(false);
+    if (st.on && document.visibilityState === 'visible' && Date.now() - st.lastSync > 2 * 60000) sync(false);
   });
   emit();
 })();

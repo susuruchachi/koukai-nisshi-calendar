@@ -146,7 +146,7 @@ function ankiFeedOccurrences(list, startKey, endKey) {
       id, masterId: id, title: ev.title || '（名前なし）', date: ev.date,
       allDay: !ev.start, startTime: ev.start || '', endTime: ev.endTime || ev.start || '',
       location: ev.place || '', notes: ev.note || '', type: ev.type || 'event',
-      readOnly: true, source, isRecurring: !!(ev.repeat || ev.rec), star: !!ev.star,
+      readOnly: true, source, isRecurring: !!(ev.repeat || ev.rec), star: !!ev.star, gcal: ev.gcal || null,
       recurrence: ev.rec || (ev.repeat ? { freq: 'weekly', interval: ev.repeat === 'biweekly' ? 2 : 1 } : null),
     };
     const at = (k, s0) => ({ ...base, occurrenceDate: k, instanceDate: s0, spanEnd: span ? addDaysToKey(s0, span) : s0 });

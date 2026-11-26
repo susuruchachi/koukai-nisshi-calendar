@@ -133,7 +133,9 @@ function VoyageLog() {
   const gcFeeds = (gc && gc.feedItems) || NO_FEEDS;
   const feeds = useMemo(() => (klFeeds.length || gcFeeds.length ? ankiFeeds.concat(klFeeds, gcFeeds) : ankiFeeds), [ankiFeeds, klFeeds, gcFeeds]);
   // 航海日誌の予定を Googleカレンダー（「航海日誌」カレンダー）に書く：予定が変わったら少し待って送る
-  useEffect(() => { if (window.KoukaiGcal) window.KoukaiGcal.attach(() => eventsRef.current); }, []);
+  // Google の「航海日誌」カレンダーで直された予定は、persist で航海日誌に入れる（ほかの端末・すするanki にも届く）
+  const persistRef = useRef(null);
+  useEffect(() => { if (window.KoukaiGcal) window.KoukaiGcal.attach(() => eventsRef.current, (next) => (persistRef.current ? persistRef.current(next) : null)); }, []);
   useEffect(() => { if (loaded && window.KoukaiGcal) window.KoukaiGcal.changed(); }, [events, loaded]);
   // 予算・入るお金のついた予定を、貸し借り帳に送る
   useEffect(() => { if (loaded && window.KashikariLink) window.KashikariLink.pushKoukai(events); }, [events, loaded, kl && kl.code, kl && kl.ready]);
@@ -439,7 +441,32 @@ function VoyageLog() {
   };
   const closeModal = () => setModalOpen(false);
 
+  persistRef.current = persist;
+
+  // Google のほかのカレンダーの予定を、航海日誌から直す・消す（gcal.js）
+  const openGcalEdit = (ev) => {
+    const d = ev.instanceDate || ev.occurrenceDate || ev.date;
+    setForm({ ...emptyForm(d), title: ev.title || '', end: ev.spanEnd && ev.spanEnd > d ? ev.spanEnd : '', allDay: !!ev.allDay,
+      startTime: ev.startTime || '09:00', endTime: ev.endTime || ev.startTime || '10:00', location: ev.location || '', notes: ev.notes || '', _gcal: ev.gcal });
+    setModalOpen(true);
+  };
+  const deleteGcalEvent = async (ev) => {
+    if (!window.confirm(`Googleカレンダー（${ev.gcal.calName}）の「${ev.title}」を消しますか？${ev.gcal.recurring ? '\n（繰り返しの予定は、この回だけ消します）' : ''}`)) return;
+    try { await window.KoukaiGcal.deleteGoogleEvent(ev.gcal); showToast('Googleカレンダーから消しました'); }
+    catch (e) { showToast(`消せませんでした（${e.message}）`, 'error'); }
+  };
+
   const handleSave = async () => {
+    if (form._gcal) {
+      if (!form.title.trim()) { showToast('タイトルを入力してください', 'error'); return; }
+      if (form.end && form.end < form.date) { showToast('最後の日は、はじめの日より後にしてください', 'error'); return; }
+      try {
+        await window.KoukaiGcal.saveGoogleEvent({ ...form._gcal, title: form.title.trim(), date: form.date, end: form.end && form.end > form.date ? form.end : '',
+          allDay: form.allDay, startTime: form.startTime, endTime: form.endTime, location: form.location, notes: form.notes });
+        setModalOpen(false); showToast('Googleカレンダーを直しました');
+      } catch (e) { showToast(`直せませんでした（${e.message}）`, 'error'); }
+      return;
+    }
     if (!form.title.trim()) {
       showToast('タイトルを入力してください', 'error');
       return;
@@ -868,7 +895,7 @@ function VoyageLog() {
                       {ev.readOnly && ev.source && (
                         <p className="text-[11px] mt-0.5" style={{ color: 'var(--brass-bright)' }}>
                           {ev.source.kind === 'kashikari' ? '💰 貸し借り帳（見るだけ）'
-                            : ev.source.kind === 'gcal' ? <><span style={{ color: ev.source.color || 'inherit' }}>●</span> {ev.source.name}（Googleカレンダー・見るだけ）</>
+                            : ev.source.kind === 'gcal' ? <><span style={{ color: ev.source.color || 'inherit' }}>●</span> {ev.source.name}（Googleカレンダー{ev.gcal && ev.gcal.editable ? '・ここで直せます' : '・見るだけ'}）</>
                             : <>{ev.source.kind === 'group' ? '👪' : '🔗'} {ev.source.name}（すするanki・見るだけ）</>}
                         </p>
                       )}
@@ -900,6 +927,16 @@ function VoyageLog() {
                       <button onClick={() => openEditModal(ev)} aria-label="編集" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
                         <Pencil size={14} />
                       </button>
+                      )}
+                      {ev.gcal && ev.gcal.editable && (
+                        <>
+                          <button onClick={() => openGcalEdit(ev)} aria-label="Googleの予定を直す" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
+                            <Pencil size={14} />
+                          </button>
+                          <button onClick={() => deleteGcalEvent(ev)} aria-label="Googleの予定を消す" className="p-1.5 rounded-md" style={{ color: 'var(--parchment-dim)', background: 'transparent' }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </>
                       )}
                       {ev.readOnly ? null : confirmDelete && confirmDelete.masterId === ev.masterId && confirmDelete.occurrenceDate === ev.occurrenceDate ? (
                         ev.isRecurring ? (
@@ -1208,7 +1245,7 @@ function VoyageLog() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-display text-lg">{form.id ? '予定を編集' : '予定を追加'}</h3>
+              <h3 className="font-display text-lg">{form._gcal ? 'Googleの予定を直す' : form.id ? '予定を編集' : '予定を追加'}</h3>
               <button onClick={closeModal} aria-label="閉じる" className="p-1" style={{ background: 'transparent', color: 'var(--ink-deep)' }}>
                 <X size={18} />
               </button>
@@ -1276,6 +1313,12 @@ function VoyageLog() {
                 </div>
               )}
 
+              {form._gcal && (
+                <p className="text-[11px] leading-relaxed rounded-lg p-2" style={{ background: 'rgba(60,90,110,0.08)', border: '1px solid var(--chart-line)', color: '#3C4E5C' }}>
+                  📆 Googleカレンダー「{form._gcal.calName}」の予定を直します（Google にすぐ書きます）。{form._gcal.recurring ? '繰り返しの予定は、この回だけ直します。' : ''}
+                </p>
+              )}
+              {!form._gcal && (
               <button
                 type="button"
                 onClick={() => setForm({ ...form, star: !form.star })}
@@ -1289,6 +1332,7 @@ function VoyageLog() {
                   <span className="block text-[11px]" style={{ color: '#5B6D7A' }}>「★ 大事な予定」とウィジェットに、あと何日かを出します</span>
                 </span>
               </button>
+              )}
 
               <label className="flex items-center gap-2 text-sm">
                 <input
@@ -1323,6 +1367,7 @@ function VoyageLog() {
                 </div>
               )}
 
+              {!form._gcal && (<>
               <label className="field block">
                 <span className="text-xs font-medium block mb-1">繰り返し</span>
                 <select
@@ -1437,7 +1482,9 @@ function VoyageLog() {
                   )}
                 </div>
               )}
+              </>)}
 
+              {!form._gcal && (<>
               <div className="grid grid-cols-2 gap-3">
                 <label className="field block">
                   <span className="text-xs font-medium block mb-1">💰 かかりそうなお金（予算）</span>
@@ -1456,6 +1503,7 @@ function VoyageLog() {
                   {kl && kl.code ? '（貸し借り帳の見通しに入ります）' : '（「☁️」→「貸し借り帳と連携」すると、貸し借り帳の見通しに入ります）'}
                 </p>
               )}
+              </>)}
 
               <label className="field block">
                 <span className="text-xs font-medium block mb-1">場所 (任意)</span>
@@ -1612,8 +1660,8 @@ function VoyageLog() {
               <div className="space-y-2 pt-3 mt-3" style={{ borderTop: '1px solid var(--chart-line)' }} aria-label="Googleカレンダー">
                 <p className="text-sm font-medium">📆 Googleカレンダーと同期</p>
                 <p className="text-xs leading-relaxed" style={{ opacity: 0.8 }}>
-                  航海日誌の予定を、Googleカレンダーの中の「航海日誌」カレンダーに自動で書きます（メインのカレンダーには書きません）。
-                  下で選んだカレンダー（家族と共有しているものも）の予定を、ここに見るだけで出します。同期するのは、アプリ・ページを開いている間です。
+                  航海日誌の予定を、Googleカレンダーの中の「航海日誌」カレンダーに自動で書きます（メインのカレンダーには書きません）。Google でその「航海日誌」カレンダーの予定を直す・足す・消すと、航海日誌にも届きます。
+                  下で選んだカレンダー（家族と共有しているものも）の予定もここに出し、書きこめるカレンダーなら ✏️ で直せます。同期するのは、アプリ・ページを開いている間です。
                 </p>
                 {!gc.on ? (
                   <button onClick={() => window.KoukaiGcal.connect()} className="w-full py-2.5 rounded-lg text-sm font-semibold" style={{ background: 'var(--ink-deep)', color: 'var(--parchment)' }}>
@@ -1628,6 +1676,14 @@ function VoyageLog() {
                         : gc.lastSync ? `✅ 同期しています（Googleへ ${gc.pushed}件・Googleから ${gc.feedItems.length}件）・${new Date(gc.lastSync).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
                         : '⏳ つないでいます…'}
                     </p>
+                    {gc.fromGoogle > 0 && <p className="text-[11px]" style={{ opacity: 0.8 }}>↩️ Google で直された予定を {gc.fromGoogle}件 入れました</p>}
+                    {gc.failed && gc.failed.length > 0 && (
+                      <div className="text-[11px] rounded-lg p-2" style={{ color: 'var(--danger)', border: '1px solid var(--danger)' }}>
+                        <p className="font-medium">⚠️ Google に送れなかった予定（{gc.failed.length}件）</p>
+                        {gc.failed.slice(0, 5).map((f, i) => <p key={i}>・{f.title}{f.date ? `（${f.date}）` : ''}：{f.message}</p>)}
+                        <p style={{ opacity: 0.8 }}>この文を教えてもらえれば直します。</p>
+                      </div>
+                    )}
                     {gc.calendars.length > 0 && (
                       <div className="rounded-lg p-2 space-y-1" style={{ background: 'rgba(60,90,110,0.08)', border: '1px solid var(--chart-line)' }}>
                         <p className="text-[11px] font-medium" style={{ opacity: 0.8 }}>ここに出すカレンダー</p>
@@ -1651,7 +1707,7 @@ function VoyageLog() {
                         やめる
                       </button>
                     </div>
-                    <p className="text-[11px]" style={{ opacity: 0.7 }}>「航海日誌」カレンダーは Google 側で直しても航海日誌には戻りません（直すときは航海日誌で）。やめても Google の「航海日誌」カレンダーは残るので、いらなければ Googleカレンダーの設定から消してください。</p>
+                    <p className="text-[11px]" style={{ opacity: 0.7 }}>やめても Google の「航海日誌」カレンダーは残るので、いらなければ Googleカレンダーの設定から消してください。</p>
                   </>
                 )}
               </div>
